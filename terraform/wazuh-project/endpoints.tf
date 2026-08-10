@@ -1,29 +1,78 @@
-# Create the S3 gateway Endpoint and associate it with the Route Table
+############################################################
+# Create the S3 Gateway endpoint and associate it with the private route table
+############################################################
+
 resource "aws_vpc_endpoint" "s3_gateway" {
-  vpc_id                    = aws_vpc.secops_lab_vpc
-  service_name              = var.s3_prefix
-  vpc_endpoint_type         = var.s3_vpc_endpoint_type 
-  route_table_ids           = aws_route_table.private_1_rt
+  vpc_id            = aws_vpc.secops_lab_vpc.id
+  service_name      = "com.amazonaws.${var.aws_region}.s3"
+  vpc_endpoint_type = "Gateway"
+
+  route_table_ids = [
+    aws_route_table.private_1_rt.id
+  ]
 
   tags = {
-    Name = "s3-gateway-endpoint"
+    Name    = "${var.project_name}-s3-endpoint"
+    Project = var.project_name
   }
 }
 
 
-# Create the SSM interface Endpoint
+############################################################
+# Define the AWS services that require private Interface VPC endpoints
+############################################################
 
 locals {
-  ssm_services = [
-    "com.amazonaws.us-east-1.ssm",      # 1. Core SSM functionality
-    "com.amazonaws.us-east-1.ssmmessages", # 2. Required for interactive Session Manager shells
-    "com.amazonaws.us-east-1.ec2messages" # 3. Required for core EC2-to-SSM agent communication
-  ]
+  interface_services = toset([
+    "ssm",         # Core Systems Manager service
+    "ssmmessages", # Session Manager interactive communication
+    "ec2messages", # EC2 communication with Systems Manager
+    "ecr.api",     # Amazon ECR API and authentication operations
+    "ecr.dkr"      # Docker image pulls from private Amazon ECR repositories
+  ])
 }
-resource "aws_vpc_endpoint" "ssm_interfaces" {
-    for_each                = toset(local.ssm_services)
-    
-    vpc_id                  = aws_vpc.secops_lab_vpc
-    service_name            = each.value
-    vpc_endpoint_type       = var.ssm_vpc_endpoint_type
+
+
+############################################################
+# Create private Interface endpoints for Systems Manager and Amazon ECR
+############################################################
+
+resource "aws_vpc_endpoint" "interface_endpoints" {
+  for_each = local.interface_services
+
+  vpc_id              = aws_vpc.secops_lab_vpc.id
+  service_name        = "com.amazonaws.${var.aws_region}.${each.value}"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = [aws_subnet.private_1.id]
+  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+  private_dns_enabled = true
+
+  tags = {
+    Name    = "${var.project_name}-${each.value}-endpoint"
+    Project = var.project_name
+  }
+}
+
+
+############################################################
+# Create the security group that allows HTTPS traffic to the Interface endpoints
+############################################################
+
+resource "aws_security_group" "vpc_endpoints" {
+  name        = "${var.project_name}-endpoint-sg"
+  description = "Allow HTTPS from the Wazuh private subnet to VPC endpoints"
+  vpc_id      = aws_vpc.secops_lab_vpc.id
+
+  ingress {
+    description = "HTTPS from private subnet"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [var.subnet_cidr]
+  }
+
+  tags = {
+    Name    = "${var.project_name}-endpoint-sg"
+    Project = var.project_name
+  }
 }

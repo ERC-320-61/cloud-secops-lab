@@ -1,52 +1,74 @@
+############################################################
+# Define the project name used for AWS resource names and tags
+############################################################
+
 variable "project_name" {
-  description   = "Name used for AWS resource tags"
-  type          = string
-  default       = "cloud-secops-lab"
+  description = "Name used for AWS resource names and tags"
+  type        = string
+  default     = "cloud-secops-lab"
 }
 
-# Region and AZ
+
+############################################################
+# Define the AWS Region where the Wazuh lab will be deployed
+############################################################
 
 variable "aws_region" {
-  description   = "AWS Region for the Wazuh lab"
-  type          = string
-  default       = "us-east-2"
+  description = "AWS Region for the Wazuh lab"
+  type        = string
+  default     = "us-east-2"
 }
+
+
+############################################################
+# Define the Availability Zone used by the private Wazuh subnet
+############################################################
 
 variable "availability_zone" {
-  description   = "AZ for Wazuh Resources"
-  type          = string
-  default       = "us-east-2a"
+  description = "Availability Zone for Wazuh resources"
+  type        = string
+  default     = "us-east-2a"
 }
 
 
-# Networking
+############################################################
+# Define the CIDR range used by the Wazuh VPC
+############################################################
+
 variable "vpc_cidr" {
-  description   = "VPC CIDR"
-  type          = string
-  default       = "10.0.0.0/16"
+  description = "CIDR range for the Wazuh VPC"
+  type        = string
+  default     = "10.0.0.0/16"
 }
+
+
+############################################################
+# Define the CIDR range used by the private Wazuh subnet
+############################################################
 
 variable "subnet_cidr" {
-  description   = "Subnet CIDR"
-  type          = string
-  default       = "10.0.1.0/24"
+  description = "CIDR range for the private Wazuh subnet"
+  type        = string
+  default     = "10.0.1.0/24"
 }
 
 
-variable "s3_prefix" {
-  description   = "Required for the VPC Endpoints"
-  type          = string
-  default       = "com.amazonaws.us-east-2a.s3"
+############################################################
+# Define the Packer-built AMI used to launch the Wazuh EC2 instance
+############################################################
+
+variable "wazuh_ami_id" {
+  description = "AMI built by Packer for the Wazuh EC2 instance"
+  type        = string
 }
 
-variable "s3_vpc_endpoint_type" {
-  description   = "Required for S3 gateway"
-  type          = string
-  default       = "Gateway"
-}
 
-variable "ssm_vpc_endpoint_type" {
-  description   = "Required for SSM"
-  type          = string
-  default       = "Interface"
+############################################################
+# Define the EC2 instance size used to run the Wazuh single-node stack
+############################################################
+
+variable "wazuh_instance_type" {
+  description = "EC2 instance type for the Wazuh server"
+  type        = string
+  default     = "c5a.xlarge"
 }
