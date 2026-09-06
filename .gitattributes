@@ -1,0 +1,5 @@
+# Guarantee LF line endings for Linux-executed shell content regardless of a
+# contributor's core.autocrlf setting. A CRLF checkout of these files breaks
+# them when run on Linux (e.g. the Packer provisioner: `/bin/bash^M`).
+*.sh    text eol=lf
+*.tftpl text eol=lf

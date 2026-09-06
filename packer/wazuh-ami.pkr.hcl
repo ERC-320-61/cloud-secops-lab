@@ -14,6 +14,18 @@ packer {
 
 ############################################################
 # Define the temporary EC2 build instance and resulting Wazuh AMI
+#
+# Temporary-builder networking is NOT finalized (PB-1). Current assumptions:
+#   - no explicit vpc_id/subnet_id: Packer infers a default VPC/subnet;
+#   - the bake needs outbound Internet (Docker apt repo + AWS CLI v2 installer);
+#   - Packer uses a public IP for SSH when one is available; otherwise its
+#     normal behavior may select the private IP, so the host running
+#     `packer build` must have a usable network path to whichever SSH endpoint
+#     Packer selects;
+#   - Packer creates a temporary security group for the builder by default;
+#     its SSH ingress must be reviewed before the first build.
+# Resolve the builder network + security-group design before `packer build`.
+# Do not add networking resources here yet. See docs/RUNBOOK.md step 1.
 ############################################################
 
 source "amazon-ebs" "wazuh" {

@@ -3,10 +3,11 @@
 > Operational skeleton for the temporary-lab lifecycle:
 > `deploy → test → validate → document → destroy`.
 >
-> **Reality check (2026-09-05):** the Wazuh deployment is **not end-to-end operational**.
-> Steps that cannot yet succeed are marked **⛔ Not yet operational** with the blocking
-> issue ID from [CURRENT_STATE.md](CURRENT_STATE.md). Do not treat this runbook as proof the
-> lab works. Update commands to real, tested ones as Phase 1 progresses.
+> **Reality check (2026-09-06):** the Wazuh deployment is **not end-to-end operational** and
+> nothing here has been executed against AWS. Steps that cannot yet succeed are marked
+> **⛔** with the blocking issue ID from [CURRENT_STATE.md](CURRENT_STATE.md). The B1 Packer
+> provisioner script is fixed in code but has never been built. Update commands to real,
+> tested ones as Phase 1 progresses.
 
 All commands assume repo root `cloud-secops-lab/` and AWS credentials for the target account
 already configured (`aws sts get-caller-identity` succeeds).
@@ -39,29 +40,39 @@ Region is `us-east-2` (`var.aws_region`). The current Phase 1 implementation dep
 
 ---
 
-## 1. Build the Wazuh base AMI (Packer)  — ⛔ Not yet operational (B1)
-
-Intended:
+## 1. Build the Wazuh base AMI (Packer)  — ⛔ Not yet run (needs approval; B1 script fixed)
 
 ```bash
 cd packer
 packer init .
+packer validate .
 packer build .
 # resulting AMI name: cloud-secops-wazuh-<timestamp>
 ```
 
-**Blocked:** [packer/scripts/install-wazuh-base.sh](../packer/scripts/install-wazuh-base.sh)
-currently contains runtime startup logic (and Terraform-template syntax), not bake-time
-setup. A build would produce an AMI **without** Docker Engine, the Docker Compose plugin, or
-`vm.max_map_count=262144`. Fix B1 before relying on this step.
+**Script status:** [packer/scripts/install-wazuh-base.sh](../packer/scripts/install-wazuh-base.sh)
+is now a true bake-time provisioner (B1 fixed) — base packages, Docker Engine + Compose
+plugin, AWS CLI v2, persisted `vm.max_map_count=262144`, Docker enabled at boot, `ubuntu`
+in the `docker` group, SSM agent verify/enable, then a verification block. It bakes **no**
+Wazuh application state (see [DECISIONS.md](DECISIONS.md) D-011).
 
-Reference for the *direction* of the bake steps (Docker install, `vm.max_map_count`, docker
-group) — not a copy target, and the Wazuh version must be chosen deliberately (not inherited
-from this script):
+**A build has never been run.** It creates AWS resources and requires explicit approval.
 
-```bash
-git show cca2387:terraform/wazuh-project/scripts/install-wazuh.sh
-```
+- **PB-1 — builder networking + security group (unresolved).** No `vpc_id` / `subnet_id` /
+  `security_group_id` is set. Packer infers a default VPC/subnet; the bake needs outbound
+  Internet (Docker apt repo + AWS CLI v2 installer). Packer uses a **public IP for SSH when
+  one is available**, otherwise its normal behaviour may select the **private IP** — so the
+  host running `packer build` must have a working network path to whichever SSH endpoint
+  Packer selects. Packer also creates a **temporary security group** for the builder by
+  default; review its SSH ingress before the first build. Decide the builder network + SG
+  design before building; do not add networking resources yet.
+- **PB-2 — line endings (resolved in code).** Root `.gitattributes` forces `*.sh` and
+  `*.tftpl` to LF regardless of `core.autocrlf`. The uploaded-script behaviour is still
+  naturally exercised by the first `packer build`.
+- **PB-3 — SSM agent (confirm at first build).** The script enables the agent supplied by
+  the Canonical base image (`snap start --enable amazon-ssm-agent`, deb-unit fallback) and
+  hard-fails if none is present (SSM is the only admin path, D-001). Confirm the snap is
+  present on the first real build.
 
 ---
 
@@ -270,5 +281,5 @@ Published ECR images incur storage cost — factor that into the persistence dec
 | Region | `us-east-2` |
 | VPC CIDR | `10.0.0.0/16` · subnet `10.0.1.0/24` |
 | Artifact bucket | `cloud-secops-lab-artifacts-<account_id>` |
-| Hard blockers | [CURRENT_STATE.md](CURRENT_STATE.md) B1–B3 |
-| Completion gaps + open decisions | [CURRENT_STATE.md](CURRENT_STATE.md) |
+| Hard blockers | [CURRENT_STATE.md](CURRENT_STATE.md) — B1 fixed in code (build pending), B2–B3 open |
+| Pre-build items / completion gaps / open decisions | [CURRENT_STATE.md](CURRENT_STATE.md) |

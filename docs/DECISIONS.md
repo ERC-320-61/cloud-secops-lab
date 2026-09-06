@@ -184,3 +184,32 @@
 - **Consequences:** Tracked in [CURRENT_STATE.md](CURRENT_STATE.md) → Open Decisions.
   Phase 2 central logging is expected to make its own encryption decision and may supersede
   this entry.
+
+---
+
+## D-011 — Custom AMI = stable host prerequisites; runtime = Wazuh deployment state
+
+- **Status:** Accepted
+- **Context:** The single `install-wazuh.sh` from `cca2387` mixed host setup (Docker,
+  kernel tuning) with deployment actions (image pulls, cert generation, `docker compose up`).
+  Commit `333460c` split it into a Packer provisioner and a Terraform user-data template but
+  left the *same* runtime content in both (hard blocker B1). B1 repair makes the boundary
+  explicit.
+- **Decision:**
+  - **The custom AMI** (`packer/scripts/install-wazuh-base.sh`) contains only stable,
+    deployment-independent host prerequisites: Ubuntu 24.04 base, Docker Engine + Compose
+    plugin, AWS CLI v2, supporting utilities, persisted `vm.max_map_count=262144`, Docker
+    enabled at boot, the `ubuntu` user in the `docker` group, and a verified SSM agent. It is
+    **Wazuh-version-independent** and carries no Wazuh images, compose file, config, or
+    certificates.
+  - **Runtime** (`terraform/wazuh-project/scripts/install-wazuh.sh.tftpl`, plus the B2/B3
+    workflows) owns everything deployment-specific: the Wazuh version, image pulls from
+    private ECR, the compose file and config from S3, certificate generation, and
+    `docker compose up`.
+- **Rationale:** A generic base image is reusable across Wazuh versions and deployments,
+  builds rarely, and keeps deployment state in the layer that is meant to be disposable
+  (D-006). Consistent with D-002 (no runtime internet) and D-009 (ECR + S3 delivery).
+- **Consequences:** No Wazuh-version variable belongs in Packer. B2/B3 must supply the
+  runtime pieces the AMI intentionally omits. Evidence:
+  [packer/scripts/install-wazuh-base.sh](../packer/scripts/install-wazuh-base.sh),
+  [scripts/install-wazuh.sh.tftpl](../terraform/wazuh-project/scripts/install-wazuh.sh.tftpl).

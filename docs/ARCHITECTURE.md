@@ -36,7 +36,7 @@
 | 3 private ECR repos, `IMMUTABLE`, scan-on-push | **Partial** | [ecr.tf](../terraform/wazuh-project/ecr.tf) — repos created but **no workflow publishes images** |
 | S3 artifact bucket (`...-artifacts-<account_id>`, public access blocked, SSE-S3 AES256) | **Partial** | [storage.tf](../terraform/wazuh-project/storage.tf) — bucket created but **empty**; no versioning, no bucket policy |
 | Wazuh EC2 instance (`c5a.xlarge`, private subnet, instance profile, templated user-data) | **Partial** | [ec2.tf](../terraform/wazuh-project/ec2.tf) — no security group, no `root_block_device`, no `metadata_options` (IMDSv2), depends on `var.wazuh_ami_id` (no default) |
-| Packer Ubuntu 24.04 AMI (`cloud-secops-wazuh-{{timestamp}}`, `c5a.xlarge` builder) | **Partial** | [wazuh-ami.pkr.hcl](../packer/wazuh-ami.pkr.hcl) — provisioner script holds runtime logic, not bake-time setup |
+| Packer Ubuntu 24.04 AMI (`cloud-secops-wazuh-{{timestamp}}`, `c5a.xlarge` builder) | **Partial** | [wazuh-ami.pkr.hcl](../packer/wazuh-ami.pkr.hcl) + [install-wazuh-base.sh](../packer/scripts/install-wazuh-base.sh) — provisioner now implements bake-time host setup only (B1 fixed); **never built / not Validated** |
 | EC2 user-data bootstrap (`aws s3 sync` config, ECR login, `docker compose pull`/`up`) | **Partial** | [scripts/install-wazuh.sh.tftpl](../terraform/wazuh-project/scripts/install-wazuh.sh.tftpl) — depends on ECR/S3 content that does not exist |
 | Wazuh Compose / configuration artifact set (checked in) | **Not present** | no `docker-compose.yml`, `generate-indexer-certs.yml`, or `ossec.conf`/manager config in the repo |
 | Terraform outputs | **Not present** | [outputs.tf](../terraform/wazuh-project/outputs.tf) is an empty placeholder; [main.tf](../terraform/wazuh-project/main.tf) also empty |
@@ -80,7 +80,7 @@ flowchart TB
 
 | ID | Gap | Effect |
 | --- | --- | --- |
-| B1 | [packer/scripts/install-wazuh-base.sh](../packer/scripts/install-wazuh-base.sh) is byte-identical to the runtime user-data template and contains startup logic, not bake-time setup | No validated AMI with Docker Engine, the Docker Compose plugin, or `vm.max_map_count=262144`; user-data then fails |
+| ~~B1~~ | **Code fixed.** [packer/scripts/install-wazuh-base.sh](../packer/scripts/install-wazuh-base.sh) now installs host prerequisites only (Docker + Compose plugin, AWS CLI v2, `vm.max_map_count`, SSM verify). Remaining: a build has never run — the *Validated AMI* is still a completion gap, and pre-build prerequisites apply (see [CURRENT_STATE.md](CURRENT_STATE.md)). |
 | B2 | No working workflow publishes Wazuh images into the 3 ECR repos | `docker compose pull` from the private registry fails |
 | B3 | No complete Wazuh Compose/config artifact set in the repo, and no workflow publishes it to `s3://<bucket>/wazuh/` | `aws s3 sync` retrieves nothing; the stack has no definition to run |
 
@@ -229,3 +229,4 @@ See [DECISIONS.md](DECISIONS.md) for full records. Summary:
 | D-008 | Keep implementation minimal and maintainable; avoid unnecessary abstractions. | Accepted |
 | D-009 | Wazuh delivery via private ECR + S3 config, no runtime internet dependency (implementation incomplete). | Accepted |
 | D-010 | Artifact bucket encryption — SSE-S3 today; SSE-S3 vs. CMK for Phase 1 is open. | Proposed |
+| D-011 | Custom AMI = stable host prerequisites only; runtime layer owns Wazuh deployment state (version, images, config, certs). | Accepted |
