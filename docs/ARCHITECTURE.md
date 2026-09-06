@@ -89,7 +89,7 @@ flowchart TB
 | Gap | Effect |
 | --- | --- |
 | No validated AMI produced by the repaired Packer workflow (feeds `var.wazuh_ami_id`) | `var.wazuh_ami_id` taking an explicit value is acceptable; the missing capability is a *trusted* AMI to put there |
-| EC2 has no dedicated security group | Agent/dashboard traffic rules undefined |
+| EC2 has no dedicated security group | Wazuh-agent and dashboard traffic rules undefined |
 | EC2 has no explicit `root_block_device` | Root volume defaults to the AMI size; may be undersized for the indexer |
 | EC2 has no `metadata_options` | IMDSv2 not enforced |
 | [outputs.tf](../terraform/wazuh-project/outputs.tf) empty | No machine-readable instance ID / bucket name for the SSM access runbook |

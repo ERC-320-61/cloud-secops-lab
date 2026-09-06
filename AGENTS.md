@@ -1,9 +1,12 @@
-# AGENTS.md — Start Here (AI Coding Agents)
+# AGENTS.md — Start Here
 
-You are working in **CloudGuard** (`cloud-secops-lab`): a reusable AWS cloud security
-operations lab. **The repository is the project memory.** Do not assume any previous
-ChatGPT / Claude / Codex / other conversation history is available. Everything you need is in
-version control.
+Onboarding and working agreement for anyone making changes in **CloudGuard**
+(`cloud-secops-lab`), a reusable AWS cloud security operations lab. It applies equally to
+human contributors and to any automated tooling used against this repository.
+
+**The repository is the source of project context.** Everything needed to understand the
+project and resume work is in version control. Do not rely on context, history, or
+discussion held outside the repository.
 
 ---
 
@@ -53,13 +56,13 @@ truth for what exists.
 
 - **Verify current repository state before implementing.** Re-run `git status` / `git diff`;
   do not rely on a stale mental model.
-- **Preserve existing unrelated working-tree changes.** There may be an uncommitted edit
-  (e.g. `terraform/wazuh-project/ecr.tf`). Do not discard, revert, or overwrite changes you
-  did not make. If they conflict with your task, stop and ask.
+- **Preserve existing unrelated working-tree changes.** If `git status` shows edits you did
+  not make, do not discard, revert, or overwrite them. If they conflict with your task, stop
+  and ask.
 - **Stay in phase.** Work only on the current phase's next task
   ([CURRENT_STATE.md](docs/CURRENT_STATE.md)) unless explicitly told otherwise. Do not start
   Phase 2+ (CloudTrail, GuardDuty, Security Hub, Config, EventBridge, Firehose, SQS, Step
-  Functions, Lambda, SNS, agents, lab workloads) while Phase 1 is incomplete.
+  Functions, Lambda, SNS, Wazuh agents, lab workloads) while Phase 1 is incomplete.
 - **Do not silently reverse an Accepted decision** in [DECISIONS.md](docs/DECISIONS.md). To
   change one, add a superseding entry and update affected docs.
 - **Distinguish implementation from planned architecture** in everything you write.
@@ -77,15 +80,15 @@ truth for what exists.
 ## 4. End-of-work requirement (continuity)
 
 Before you finish a **substantial** development task, you **must** update
-[docs/CURRENT_STATE.md](docs/CURRENT_STATE.md) so the next contextless agent is not misled.
-Update its Snapshot plus:
+[docs/CURRENT_STATE.md](docs/CURRENT_STATE.md) so that whoever picks the work up next — with
+no context beyond this repository — is not misled. Update its Snapshot plus:
 
 - work completed;
 - work left incomplete;
 - new or resolved blockers;
 - relevant changed files;
 - the next logical task and its prerequisites;
-- any assumptions another agent needs to know.
+- any assumptions worth recording for whoever continues.
 
 Also update, when applicable:
 
@@ -98,11 +101,11 @@ Also update, when applicable:
 | The high-level project summary or current/target split | [README.md](README.md) |
 
 You do **not** need doc updates for trivial edits (typos, formatting, comments). You **do**
-need them whenever skipping the update could cause the next agent to misunderstand project
+need them whenever skipping the update could cause the next person to misunderstand project
 state.
 
-Do not commit unless the human explicitly asks. When you do, keep documentation updates in
-the same commit/PR as the implementation change they describe.
+Do not commit unless explicitly asked. When you do, keep documentation updates in the same
+commit/PR as the implementation change they describe.
 
 ---
 
@@ -123,3 +126,12 @@ here.**
 | Roadmap + status model | [docs/ROADMAP.md](docs/ROADMAP.md) |
 | Not part of the MVP at all | malware-analysis pipeline, vulnerability-management pipeline (possible future expansion — [docs/PROJECT_CHARTER.md](docs/PROJECT_CHARTER.md)) |
 | Deferred for the current phase (may return later) | public Wazuh dashboard (ALB/ACM), multi-AZ/HA Wazuh — [docs/DECISIONS.md](docs/DECISIONS.md) |
+
+---
+
+## 6. Tool-specific instruction files
+
+Some editors and assistant tools look for their own instruction file at the repository root.
+Any such file (for example `CLAUDE.md`) should do nothing more than point back to this
+document and hold setup details specific to that one tool. Shared project guidance stays
+here and in `docs/`; it is not duplicated into tool files.

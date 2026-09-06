@@ -55,7 +55,7 @@ Demonstrate hands-on capability in:
 | Private by default | No public infrastructure purely for administration. |
 | Least reasonable footprint | Minimum infrastructure/code to be secure, clear, maintainable, repeatable. Avoid over-engineering and unnecessary abstractions. |
 | Repeatable lifecycle | `deploy → test → validate → document → destroy`. |
-| Documentation is memory | The repo must let a contextless human or agent resume work. |
+| Documentation is the record | The repository alone must let a new contributor resume work, with no outside context. |
 | Decisions are recorded | Accepted architectural choices live in [DECISIONS.md](DECISIONS.md) and are not silently reversed. |
 
 ## Security principles
@@ -153,7 +153,7 @@ pipelines.
 
 ## Success criteria
 
-- A new contributor/agent can resume work using only the repository.
+- A new contributor can resume work using only the repository.
 - Each phase can be deployed, validated, and destroyed repeatably.
 - Monthly cost stays within the cost philosophy when the lifecycle is followed.
 - Security principles above hold in the deployed environment.

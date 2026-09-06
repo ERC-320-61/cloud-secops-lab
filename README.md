@@ -109,8 +109,6 @@ task: **[docs/CURRENT_STATE.md](docs/CURRENT_STATE.md)** (kept current; not dupl
 
 | Document | Purpose |
 | --- | --- |
-| [AGENTS.md](AGENTS.md) | **Start here if you are an AI coding agent.** Reading order, source-of-truth precedence, end-of-work handoff rules. |
-| [CLAUDE.md](CLAUDE.md) | Pointer for Claude-based agents to `AGENTS.md`. |
 | [docs/PROJECT_CHARTER.md](docs/PROJECT_CHARTER.md) | Long-lived purpose, goals, principles, MVP definition, non-goals. |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Current vs. target architecture, with diagrams. |
 | [docs/CURRENT_STATE.md](docs/CURRENT_STATE.md) | **Primary development-handoff document.** Phase status, blockers, next task. |
@@ -118,15 +116,18 @@ task: **[docs/CURRENT_STATE.md](docs/CURRENT_STATE.md)** (kept current; not dupl
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Lightweight architecture decision log. |
 | [docs/RUNBOOK.md](docs/RUNBOOK.md) | Operational skeleton for deploy/validate/destroy (steps marked *Not yet operational* where applicable). |
 
+Before contributing, read [AGENTS.md](AGENTS.md) — it defines the documentation reading
+order, the source-of-truth hierarchy, and the handoff requirements every change must follow.
+
 ---
 
 ## Repository layout
 
 ```text
 README.md                     project entry point (this file)
-AGENTS.md                     mandatory starting point for AI agents
-CLAUDE.md                     Claude-agent pointer to AGENTS.md
-docs/                         project memory (charter, architecture, state, roadmap, decisions, runbook)
+AGENTS.md                     contributor guide — reading order, source-of-truth, handoff rules
+CLAUDE.md                     tool-specific instruction file (defers to AGENTS.md)
+docs/                         project record (charter, architecture, state, roadmap, decisions, runbook)
 packer/                       Ubuntu 24.04 Wazuh AMI build (Partial)
   wazuh-ami.pkr.hcl
   variables.pkr.hcl

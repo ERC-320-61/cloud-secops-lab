@@ -1,10 +1,10 @@
 # CloudGuard — Current State (Development Handoff)
 
-> **This is the primary handoff document.** A new agent/session should read this immediately
-> after [PROJECT_CHARTER.md](PROJECT_CHARTER.md), then verify it against actual code and
+> **This is the primary handoff document.** Read it immediately after
+> [PROJECT_CHARTER.md](PROJECT_CHARTER.md), then verify it against actual code and
 > `git status` before doing anything.
 >
-> Update rule: any agent that performs a **substantial** development task must update this
+> Update rule: anyone who performs a **substantial** development task must update this
 > file before finishing. See [../AGENTS.md](../AGENTS.md).
 
 ---
@@ -13,29 +13,27 @@
 
 | Field | Value |
 | --- | --- |
-| Last updated | 2026-09-05 |
-| Updated by | Documentation/continuity baseline task + correction pass (no implementation changes) |
-| Active branch | `docs/project-continuity-baseline` |
+| Last updated | 2026-09-06 |
+| Updated by | Documentation baseline → correction pass → professionalization pass (documentation only; no implementation changes) |
+| Active branch | `docs/project-continuity-baseline` (not yet merged to `main`) |
 | Default branch | `main` |
-| Most recent substantive commit | `333460c` — *Add Wazuh AWS infrastructure foundation* (2026-08-09) |
-| Prior commits | `96670c7` *Terraform work* · `cca2387` *Initial Commit* |
+| Most recent commit | `7173565` — *docs: establish project continuity baseline* (2026-09-06) |
+| Prior commits | `333460c` *Add Wazuh AWS infrastructure foundation* · `96670c7` *Terraform work* · `cca2387` *Initial Commit* |
+| Most recent commit touching infrastructure | `333460c` (2026-08-09) — no code has changed since |
 | Current phase | **Phase 1 — Private Wazuh Foundation** |
 | Phase status | **IN PROGRESS** — scaffolding present, not end-to-end deployable |
 | Validation status | No successful end-to-end deployment or validation is documented in the repository. Treat the current implementation as **unvalidated** until Phase 1 validation is performed. |
 
-### Working-tree changes at last update
+### Working-tree state
 
-```
- M terraform/wazuh-project/ecr.tf
-```
-
-- Pre-existing, **not** created by the documentation task.
-- Content: comment/banner formatting only (three `####` header blocks added above the
-  existing `aws_ecr_repository` resources). No Terraform behavior change. Confirmed via
-  `git diff`.
-- **Preserve this change.** Do not discard or overwrite it.
-- The documentation task adds only: `README.md` (rewrite), `AGENTS.md`, `CLAUDE.md`,
-  `docs/*.md`.
+- The documentation set (`README.md`, `AGENTS.md`, `CLAUDE.md`, `docs/*.md`) is committed in
+  `7173565`. A follow-up professionalization pass (public-portfolio wording; no meaning
+  changes) may still be uncommitted in those same files — check `git status`.
+- **No infrastructure code has changed since `333460c`.** A previously uncommitted
+  comment-only edit to `terraform/wazuh-project/ecr.tf` was discarded; that file is back to
+  its `333460c` state.
+- Confirm with `git status` / `git diff` before starting — do not assume this section is
+  current if the branch has moved.
 
 ---
 
@@ -53,7 +51,8 @@ That commit:
 - Changed the Wazuh instance type from `t3.large` to `c5a.xlarge` and dropped the explicit
   ~50 GB root-volume configuration.
 
-Since then: only the uncommitted comment-only edit to `ecr.tf`.
+Since `333460c`, the only change has been the documentation baseline (`7173565`). No
+Terraform, Packer, or script file has been modified.
 
 ---
 
@@ -244,7 +243,7 @@ architecture.
 | [terraform/wazuh-project/ec2.tf](../terraform/wazuh-project/ec2.tf) | Wazuh instance (hardening gaps here) |
 | [terraform/wazuh-project/endpoints.tf](../terraform/wazuh-project/endpoints.tf) | VPC endpoints + endpoint SG |
 | [terraform/wazuh-project/roles.tf](../terraform/wazuh-project/roles.tf) | EC2 IAM |
-| [terraform/wazuh-project/ecr.tf](../terraform/wazuh-project/ecr.tf) | ECR repos (has the pending comment-only diff) |
+| [terraform/wazuh-project/ecr.tf](../terraform/wazuh-project/ecr.tf) | ECR repository definitions |
 | [terraform/wazuh-project/storage.tf](../terraform/wazuh-project/storage.tf) | Artifact bucket |
 | [terraform/wazuh-project/outputs.tf](../terraform/wazuh-project/outputs.tf) | Empty — needs outputs |
 | [terraform/wazuh-project/scripts/install-wazuh.sh.tftpl](../terraform/wazuh-project/scripts/install-wazuh.sh.tftpl) | EC2 user-data (runtime) |
@@ -262,7 +261,8 @@ git show cca2387:terraform/wazuh-project/scripts/install-wazuh.sh
 
 ## Handoff notes
 
-- The repository is the project memory. There is **no** prior chat history to rely on.
+- The repository is the project record. Everything needed to resume work is in version
+  control; do not rely on any context from outside it.
 - No successful end-to-end deployment or validation is documented in the repository. Treat
   all infrastructure as unvalidated until Phase 1 validation is performed.
 - The historical design (`t3.large`, ~50 GB EBS, Wazuh `v4.14.7`, `git clone wazuh-docker`)

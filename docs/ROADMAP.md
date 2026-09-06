@@ -29,15 +29,16 @@ Current position: **Phase 1 — Private Wazuh Platform — in progress (nothing 
 
 ## Phase 0 — Repository / Project Foundation
 
-Goal: the repository is self-describing project memory.
+Goal: the repository is self-describing — a new contributor can orient and resume work from
+version control alone.
 
 **Core deliverable — complete on branch `docs/project-continuity-baseline`, pending review/merge:**
 
 | Item | Status |
 | --- | --- |
 | `README.md` as a real entry point | Implemented |
-| `AGENTS.md` (agent start point + continuity rules) | Implemented |
-| `CLAUDE.md` (pointer) | Implemented |
+| `AGENTS.md` (contributor guide: reading order, source-of-truth, continuity rules) | Implemented |
+| `CLAUDE.md` (tool-specific instruction file, defers to `AGENTS.md`) | Implemented |
 | `docs/PROJECT_CHARTER.md` | Implemented |
 | `docs/ARCHITECTURE.md` (current vs target, diagrams) | Implemented |
 | `docs/CURRENT_STATE.md` (handoff) | Implemented — must be kept updated every substantial task |

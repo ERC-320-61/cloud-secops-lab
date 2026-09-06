@@ -5,7 +5,7 @@
 > Structure per entry: **ID · Decision · Status · Context · Rationale · Consequences.**
 > Status is one of: Accepted · Superseded · Reversed · Proposed.
 >
-> Agents must not silently reverse an **Accepted** decision. To change one, add a new entry
+> An **Accepted** decision must not be silently reversed. To change one, add a new entry
 > that supersedes it and update [ARCHITECTURE.md](ARCHITECTURE.md) / [ROADMAP.md](ROADMAP.md)
 > as needed.
 
@@ -134,7 +134,7 @@
 - **Decision:** Prefer the least reasonable amount of code and infrastructure to be secure,
   clear, maintainable, and repeatable. One Terraform root module until there is a concrete
   reason to split. Avoid speculative abstraction.
-- **Rationale:** Readability and continuity — a new agent should grasp the whole module
+- **Rationale:** Readability and continuity — a new contributor should grasp the whole module
   quickly.
 - **Consequences:** Resist premature `modules/`, multi-env scaffolding, or generic wrappers.
   Revisit only when duplication or multi-account work makes it clearly worthwhile.
