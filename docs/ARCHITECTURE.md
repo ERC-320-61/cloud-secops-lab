@@ -11,9 +11,10 @@
 
 ## 1. Current architecture (Phase 1 foundation)
 
-**Scope:** a single AWS account, region `us-east-2`, one Terraform root module
-([terraform/wazuh-project/](../terraform/wazuh-project/)) and one Packer build
-([packer/](../packer/)).
+**Scope:** a single AWS account, region `us-east-2`, **two Terraform roots** —
+[terraform/wazuh-project/](../terraform/wazuh-project/) (disposable Wazuh runtime) and
+[terraform/packer-build/](../terraform/packer-build/) (persistent Packer build network,
+[DECISIONS.md](DECISIONS.md) D-012) — and one Packer build ([packer/](../packer/)).
 
 ### 1.1 Component status
 
@@ -39,9 +40,22 @@
 | Packer Ubuntu 24.04 AMI (`cloud-secops-wazuh-{{timestamp}}`, `c5a.xlarge` builder) | **Partial** | [wazuh-ami.pkr.hcl](../packer/wazuh-ami.pkr.hcl) + [install-wazuh-base.sh](../packer/scripts/install-wazuh-base.sh) — provisioner now implements bake-time host setup only (B1 fixed); **never built / not Validated** |
 | EC2 user-data bootstrap (`aws s3 sync` config, ECR login, `docker compose pull`/`up`) | **Partial** | [scripts/install-wazuh.sh.tftpl](../terraform/wazuh-project/scripts/install-wazuh.sh.tftpl) — depends on ECR/S3 content that does not exist |
 | Wazuh Compose / configuration artifact set (checked in) | **Not present** | no `docker-compose.yml`, `generate-indexer-certs.yml`, or `ossec.conf`/manager config in the repo |
-| Terraform outputs | **Not present** | [outputs.tf](../terraform/wazuh-project/outputs.tf) is an empty placeholder; [main.tf](../terraform/wazuh-project/main.tf) also empty |
+| Terraform outputs | **Not present** | [outputs.tf](../terraform/wazuh-project/outputs.tf) is an empty placeholder |
 | Remote state backend | **Not present** | no `backend` block; local state (git-ignored) |
 | `terraform apply` / Packer build ever run and validated | **No evidence** | nothing in git history or working tree indicates a successful deploy |
+
+**Packer build network** ([terraform/packer-build/](../terraform/packer-build/), [DECISIONS.md](DECISIONS.md) D-012):
+
+| Component | State | Evidence |
+| --- | --- | --- |
+| Dedicated build VPC `10.10.0.0/24` (non-overlapping with runtime `10.0.0.0/16`), DNS on | **Implemented (code, not applied)** | `aws_vpc.build` in [network.tf](../terraform/packer-build/network.tf) |
+| One build subnet, `map_public_ip_on_launch = false` | **Implemented (code, not applied)** | `aws_subnet.build` |
+| Internet Gateway + `0.0.0.0/0` route + association | **Implemented (code, not applied)** | `aws_internet_gateway.build`, `aws_route.build_default` |
+| Builder security group — **no ingress**; egress TCP 80 + 443 only | **Implemented (code, not applied)** | `aws_security_group.build` |
+| Builder IAM role + `AmazonSSMManagedInstanceCore` **only** + instance profile | **Implemented (code, not applied)** | [iam.tf](../terraform/packer-build/iam.tf) |
+| Deterministic resource-specific `Name` tags on the VPC / subnet / SG (`cloud-secops-lab-packer-build-{vpc,subnet,sg}`) | **Implemented (code, not applied)** | `locals` in [network.tf](../terraform/packer-build/network.tf) |
+| Packer source wired to the build network via **fail-closed** `Project`+`Purpose`+`Name` filters (no `most_free`/`random`), SSM interface, IMDSv2, explicit public IP | **Implemented (code, not built)** | [packer/wazuh-ami.pkr.hcl](../packer/wazuh-ami.pkr.hcl) |
+| NAT Gateway in the build network | **Not present (by design)** | IGW only; egress is public, no hourly NAT charge |
 
 ### 1.2 Current foundation diagram
 
@@ -97,6 +111,41 @@ flowchart TB
 Historical note: an earlier design used `t3.large` with an explicit ~50 GB EBS root volume.
 Current Terraform uses `c5a.xlarge` and **no** explicit root-volume block (AMI default size
 applies). Root-volume sizing is an open Phase 1 completion item.
+
+### 1.4 Packer build path (Implemented in code; not applied/built)
+
+The AMI is baked in a **persistent, isolated build network** ([DECISIONS.md](DECISIONS.md)
+D-012) that is separate from the Wazuh runtime and outlives individual builds. Persistent =
+control-plane only (no hourly cost). The builder itself is ephemeral and Packer-managed.
+
+```mermaid
+flowchart TB
+    OP["Operator / CI<br/>runs packer build<br/>(needs SSM plugin + iam:PassRole)"]
+
+    subgraph ACC["AWS account - us-east-2"]
+        SSMSVC["AWS Systems Manager<br/>Session Manager"]
+
+        subgraph BVPC["Build VPC 10.10.0.0/24 (PERSISTENT)"]
+            IGW["Internet Gateway (no hourly cost)"]
+            SG["Builder SG (PERSISTENT)<br/>ingress: NONE<br/>egress: TCP 80 + 443 only"]
+            subgraph BSUB["Build subnet (PERSISTENT)<br/>map_public_ip_on_launch = false"]
+                BLD["Temporary Packer builder (EPHEMERAL)<br/>Ubuntu 24.04 · IMDSv2 required<br/>explicit public IPv4 (egress only)<br/>instance profile: SSM core only"]
+            end
+        end
+
+        AMI["cloud-secops-wazuh-&lt;timestamp&gt; AMI<br/>(persists after build)"]
+    end
+
+    OP -->|"manage builder (SSH tunnelled)"| SSMSVC --> BLD
+    BLD -->|"outbound only: Docker repo, AWS CLI v2, apt"| IGW
+    BLD -.->|"Packer creates then terminates"| AMI
+```
+
+Key points: no public inbound to the builder; management is SSM-only; the public IPv4 is a
+deliberate, scoped opt-in for egress; no NAT Gateway. Packer finds the network by
+deterministic `Project`+`Purpose`+`Name` tag filters and the instance profile by exact name
+(no generated IDs in source); the filters **identify** the resources and the build is
+**fail-closed** — an ambiguous match aborts rather than picking one.
 
 ---
 
@@ -230,3 +279,4 @@ See [DECISIONS.md](DECISIONS.md) for full records. Summary:
 | D-009 | Wazuh delivery via private ECR + S3 config, no runtime internet dependency (implementation incomplete). | Accepted |
 | D-010 | Artifact bucket encryption — SSE-S3 today; SSE-S3 vs. CMK for Phase 1 is open. | Proposed |
 | D-011 | Custom AMI = stable host prerequisites only; runtime layer owns Wazuh deployment state (version, images, config, certs). | Accepted |
+| D-012 | Persistent dedicated Packer build network (own Terraform root); ephemeral builder with explicit public egress, no public admin ingress, SSM Session Manager management, IMDSv2; deterministic fail-closed resource selection. Resolves open item PB-1. | Accepted |

@@ -3,18 +3,19 @@
 > Operational skeleton for the temporary-lab lifecycle:
 > `deploy → test → validate → document → destroy`.
 >
-> **Reality check (2026-09-06):** the Wazuh deployment is **not end-to-end operational** and
-> nothing here has been executed against AWS. Steps that cannot yet succeed are marked
-> **⛔** with the blocking issue ID from [CURRENT_STATE.md](CURRENT_STATE.md). The B1 Packer
-> provisioner script is fixed in code but has never been built. Update commands to real,
-> tested ones as Phase 1 progresses.
+> **Reality check (2026-09-06):** the B1 Packer provisioner and the persistent build
+> network (D-012) are implemented in code and **pass local `fmt`/`init`/`validate`
+> (Terraform + Packer)**, but **nothing has been applied or built against AWS**. Steps that
+> cannot yet succeed are marked **⛔** with the blocking issue ID from
+> [CURRENT_STATE.md](CURRENT_STATE.md). Update commands to real, tested ones as Phase 1
+> progresses.
 
 All commands assume repo root `cloud-secops-lab/` and AWS credentials for the target account
 already configured (`aws sts get-caller-identity` succeeds).
 
 > **⚠️ Deployment ordering is not yet designed.** Steps 3–5 below (publish artifacts →
-> publish images → `terraform apply`) are **not** a runnable sequence today: Terraform (in
-> the single root module) is what *creates* the S3 artifact bucket and the ECR repositories,
+> publish images → `terraform apply`) are **not** a runnable sequence today: Terraform (the
+> Wazuh runtime root) is what *creates* the S3 artifact bucket and the ECR repositories,
 > so those destinations do not exist until `terraform apply` runs — yet the EC2 user-data
 > expects them populated at first boot. Resolving this ordering (and whether artifact
 > infrastructure gets its own lifecycle/state) is an **open Phase 1 decision** — see
@@ -26,53 +27,92 @@ already configured (`aws sts get-caller-identity` succeeds).
 
 ## 0. Prerequisites
 
-| Requirement | Check |
-| --- | --- |
-| AWS CLI v2 | `aws --version` |
-| AWS Session Manager plugin | `session-manager-plugin --version` |
-| Terraform `>= 1.7.0` | `terraform version` |
-| Packer `>= 1.9` (Amazon plugin) | `packer version` |
-| Credentials for the target AWS account (`us-east-2`) | `aws sts get-caller-identity` |
-| Docker (only if publishing Wazuh images locally — blocker B2) | `docker version` |
+| Requirement | Check | Status (operator workstation, 2026-09-06) |
+| --- | --- | --- |
+| AWS CLI v2 | `aws --version` | **verified — `aws-cli/2.36.37`** |
+| AWS Session Manager plugin (required — Packer tunnels the builder over SSM) | `session-manager-plugin --version` | **verified — `1.2.835.0`** |
+| Terraform `>= 1.7.0` | `terraform version` | **verified — `v1.16.1`** |
+| Packer `>= 1.9` (Amazon plugin `github.com/hashicorp/amazon v1.8.2`) | `packer version` | **verified — installed; `packer init`/`validate` pass** |
+| Credentials for the target AWS account (`us-east-2`) | `aws sts get-caller-identity` | operator-supplied at build time |
+| Packer-caller least-privilege IAM policy (PB-4) — reviewed **before** build authorization; not in this repo | reviewed against the operator principal's policy | **OPEN** — required scope in [CURRENT_STATE.md](CURRENT_STATE.md) PB-4 (builder EC2 lifecycle, AMI/snapshot ops, source-AMI + VPC/subnet/SG discovery, `iam:PassRole` limited to `cloud-secops-lab-packer-build-ssm-role`, `AWS-StartSSHSession` session use + clean `TerminateSession`, `ec2:DescribeInstanceStatus`) |
+| Docker (only if publishing Wazuh images locally — blocker B2) | `docker version` | not required for the AMI build |
 
 Region is `us-east-2` (`var.aws_region`). The current Phase 1 implementation deploys into a
 **single** AWS account ([DECISIONS.md](DECISIONS.md) D-007).
 
 ---
 
-## 1. Build the Wazuh base AMI (Packer)  — ⛔ Not yet run (needs approval; B1 script fixed)
+## 1. Build the Wazuh base AMI (Packer)  — ⛔ Not yet run (needs approval)
+
+### 1a. Provision the persistent Packer build network (one-time; D-012)
+
+```bash
+terraform -chdir=terraform/packer-build init      # already run locally — selects hashicorp/aws 6.57.1
+terraform -chdir=terraform/packer-build validate  # already passes locally
+terraform -chdir=terraform/packer-build apply      # NOT yet run — creates the persistent VPC/subnet/IGW/route/SG/instance profile
+terraform -chdir=terraform/packer-build output
+```
+
+- `fmt -check`, `init`, and `validate` were **run successfully on the operator workstation
+  (2026-09-06)**; `terraform/packer-build/.terraform.lock.hcl` pins `hashicorp/aws 6.57.1`
+  and is present and intended for source control with the PB-1 commit. Only `apply`
+  remains, and it has **not** been run.
+- This root is **persistent supporting infrastructure**. It has a **different lifecycle**
+  from `terraform/wazuh-project/` — do **not** `terraform destroy` it as part of the Wazuh
+  runtime deploy→test→validate→destroy cycle ([DECISIONS.md](DECISIONS.md) D-012).
+- Cost: VPC, subnet, Internet Gateway, route table, security group and IAM only — **no
+  hourly or data-processing charge**. Cost is incurred only by the ephemeral builder Packer
+  creates during a build.
+- Non-overlapping CIDR: build VPC `10.10.0.0/24` vs. Wazuh runtime `10.0.0.0/16`.
+
+### 1b. Build the AMI
 
 ```bash
 cd packer
-packer init .
-packer validate .
-packer build .
+packer init .       # already run locally — installs github.com/hashicorp/amazon v1.8.2
+packer validate .   # already passes locally
+packer build .      # NOT yet run — creates the ephemeral builder + AMI
 # resulting AMI name: cloud-secops-wazuh-<timestamp>
 ```
 
-**Script status:** [packer/scripts/install-wazuh-base.sh](../packer/scripts/install-wazuh-base.sh)
-is now a true bake-time provisioner (B1 fixed) — base packages, Docker Engine + Compose
-plugin, AWS CLI v2, persisted `vm.max_map_count=262144`, Docker enabled at boot, `ubuntu`
-in the `docker` group, SSM agent verify/enable, then a verification block. It bakes **no**
-Wazuh application state (see [DECISIONS.md](DECISIONS.md) D-011).
+`fmt -check`, `init`, and `validate` were **run successfully on the operator workstation
+(2026-09-06)**. Only `packer build` remains, and it has **not** been run.
+
+**How the builder is placed** ([packer/wazuh-ami.pkr.hcl](../packer/wazuh-ami.pkr.hcl)):
+it finds the build VPC / subnet / security group by **deterministic tag filters** —
+`tag:Project = cloud-secops-lab` + `tag:Purpose = packer-build` + a resource-specific
+`tag:Name` (`cloud-secops-lab-packer-build-{vpc,subnet,sg}`). `subnet_filter` has **no**
+`most_free`/`random`, so if a filter ever matched more than one resource the build
+**aborts** instead of guessing. It attaches the
+`cloud-secops-lab-packer-build-ssm-profile` instance profile, **explicitly** associates a
+public IPv4 (egress only — the subnet does not auto-assign), reaches the builder through
+**SSM Session Manager** (`ssh_interface = "session_manager"`; no inbound SSH; the SG has no
+ingress), and requires **IMDSv2**.
+
+**Bake-script status** ([packer/scripts/install-wazuh-base.sh](../packer/scripts/install-wazuh-base.sh)):
+a true bake-time provisioner (B1 fixed) — base packages, Docker Engine + Compose plugin,
+AWS CLI v2, persisted `vm.max_map_count=262144`, Docker enabled at boot, `ubuntu` in the
+`docker` group, SSM agent enable, verification block. **No** Wazuh application state
+([DECISIONS.md](DECISIONS.md) D-011).
 
 **A build has never been run.** It creates AWS resources and requires explicit approval.
+Confirm first:
 
-- **PB-1 — builder networking + security group (unresolved).** No `vpc_id` / `subnet_id` /
-  `security_group_id` is set. Packer infers a default VPC/subnet; the bake needs outbound
-  Internet (Docker apt repo + AWS CLI v2 installer). Packer uses a **public IP for SSH when
-  one is available**, otherwise its normal behaviour may select the **private IP** — so the
-  host running `packer build` must have a working network path to whichever SSH endpoint
-  Packer selects. Packer also creates a **temporary security group** for the builder by
-  default; review its SSH ingress before the first build. Decide the builder network + SG
-  design before building; do not add networking resources yet.
-- **PB-2 — line endings (resolved in code).** Root `.gitattributes` forces `*.sh` and
-  `*.tftpl` to LF regardless of `core.autocrlf`. The uploaded-script behaviour is still
-  naturally exercised by the first `packer build`.
-- **PB-3 — SSM agent (confirm at first build).** The script enables the agent supplied by
-  the Canonical base image (`snap start --enable amazon-ssm-agent`, deb-unit fallback) and
-  hard-fails if none is present (SSM is the only admin path, D-001). Confirm the snap is
-  present on the first real build.
+- **PB-1 / D-012 (resolved; `fmt`/`init`/`validate` pass locally).** Run step 1a `apply`
+  first so the tag filters resolve.
+- **PB-4 (open — the only remaining pre-build blocker).** Local toolchain is **done**
+  (Terraform `v1.16.1`, AWS CLI `2.36.37`, SSM plugin `1.2.835.0`, Packer — all verified).
+  Still required: define and review a least-privilege **Packer-caller IAM policy** (see
+  [CURRENT_STATE.md](CURRENT_STATE.md) PB-4) — builder EC2 lifecycle, AMI/snapshot ops,
+  source-AMI + VPC/subnet/SG discovery, `iam:PassRole` limited to
+  `cloud-secops-lab-packer-build-ssm-role`, `AWS-StartSSHSession` session use
+  (`ssm:StartSession` + clean `ssm:TerminateSession`), and `ec2:DescribeInstanceStatus`.
+  Not `AdministratorAccess`/`ec2:*`; not written in this repo (no designated principal).
+- **PB-2 — line endings (resolved in code).** `.gitattributes` forces `*.sh` / `*.tftpl` to
+  LF; still naturally exercised by the first build.
+- **PB-3 — SSM agent (confirm at first build).** The bake script enables the agent supplied
+  by the Canonical base image (`snap start --enable amazon-ssm-agent`, deb-unit fallback)
+  and hard-fails if none is present (D-001). Confirm the snap is present on the first build.
 
 ---
 
@@ -240,18 +280,19 @@ aws s3 rm "s3://cloud-secops-lab-artifacts-<account_id>/" --recursive
 
 ## 11. Verify cleanup + cost
 
-After destroy, confirm nothing from this project is left running. Scope every check to the
-project's resources (by `Project` tag or the project VPC) — do **not** assume the account /
-region otherwise contains nothing:
+After destroy, confirm nothing from the **Wazuh runtime** is left running. Both Terraform
+roots tag `Project = cloud-secops-lab`, so scope runtime checks to the runtime VPC by its
+`Name` tag (the persistent build network is `tag:Purpose = packer-build` and is *expected*
+to remain):
 
 ```bash
-# project VPC id (used to scope the checks below)
+# Wazuh runtime VPC id (Name tag distinguishes it from the build VPC)
 VPC_ID=$(aws ec2 describe-vpcs --region us-east-2 \
-  --filters 'Name=tag:Project,Values=cloud-secops-lab' \
+  --filters 'Name=tag:Name,Values=cloud-secops-lab-vpc' \
   --query 'Vpcs[].VpcId' --output text)
 
 aws ec2 describe-instances --region us-east-2 \
-  --filters 'Name=tag:Project,Values=cloud-secops-lab' 'Name=instance-state-name,Values=pending,running,stopping,stopped' \
+  --filters 'Name=tag:Name,Values=cloud-secops-lab-wazuh' 'Name=instance-state-name,Values=pending,running,stopping,stopped' \
   --query 'Reservations[].Instances[].[InstanceId,State.Name]' --output text
 
 aws ec2 describe-vpc-endpoints --region us-east-2 \
@@ -264,10 +305,15 @@ aws ec2 describe-vpc-endpoints --region us-east-2 \
   --query 'NatGateways[].NatGatewayId' --output text
 ```
 
-Cost watch items while deployed: the **interface VPC endpoints** and the **Wazuh EC2
-instance** carry recurring hourly (and, for endpoints, data-processing) cost. The S3 gateway
-endpoint, the ECR repositories (storage only), and an empty artifact bucket are negligible.
-Published ECR images incur storage cost — factor that into the persistence decision above.
+Cost watch items while the runtime is deployed: the **interface VPC endpoints** and the
+**Wazuh EC2 instance** carry recurring hourly (and, for endpoints, data-processing) cost.
+The S3 gateway endpoint, the ECR repositories (storage only), and an empty artifact bucket
+are negligible. Published ECR images incur storage cost.
+
+The **persistent build network** (`terraform/packer-build/`) is expected to stay up between
+builds and carries **no hourly cost** — VPC, subnet, IGW, route table, SG and IAM only. If
+you want it gone entirely, `terraform -chdir=terraform/packer-build destroy` it explicitly;
+it is never removed by the runtime lifecycle.
 
 ---
 
@@ -275,7 +321,8 @@ Published ECR images incur storage cost — factor that into the persistence dec
 
 | What | Where |
 | --- | --- |
-| Terraform module | [terraform/wazuh-project/](../terraform/wazuh-project/) |
+| Terraform root — Wazuh runtime (disposable) | [terraform/wazuh-project/](../terraform/wazuh-project/) |
+| Terraform root — Packer build network (persistent, D-012) | [terraform/packer-build/](../terraform/packer-build/) |
 | Packer build | [packer/](../packer/) |
 | Runtime bootstrap (user-data) | [terraform/wazuh-project/scripts/install-wazuh.sh.tftpl](../terraform/wazuh-project/scripts/install-wazuh.sh.tftpl) |
 | Region | `us-east-2` |

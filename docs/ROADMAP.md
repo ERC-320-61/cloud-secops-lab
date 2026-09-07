@@ -18,7 +18,7 @@ Current position: **Phase 1 — Private Wazuh Platform — in progress (nothing 
 | Phase | Title | Status |
 | --- | --- | --- |
 | 0 | Repository / Project Foundation | Complete on this branch (pending merge) |
-| 1 | Private Wazuh Platform | In progress — foundation Implemented; base-AMI provisioning Implemented (B1 fixed in code); nothing Validated |
+| 1 | Private Wazuh Platform | In progress — foundation + base-AMI provisioning + persistent Packer build network all Implemented in code; nothing applied or Validated |
 | 2 | AWS Security Sources | Planned |
 | 3 | AWS Findings → Wazuh Integration | Planned |
 | 4 | Selective Automated Response | Planned |
@@ -75,8 +75,9 @@ Nothing in Phase 2+ starts until this is done. Canonical blocker/gap detail:
 
 | Item | Status | Blocker / note |
 | --- | --- | --- |
-| Correct base-AMI provisioning (Docker Engine, Compose plugin, AWS CLI v2, `vm.max_map_count`, SSM verify) | Implemented | **B1 fixed in code** ([install-wazuh-base.sh](../packer/scripts/install-wazuh-base.sh), uncommitted); statically validated; boundary = [DECISIONS.md](DECISIONS.md) D-011 |
-| Validated AMI produced by the repaired Packer workflow | Planned | needs an approved `packer build` + smoke test; pre-build items in [CURRENT_STATE.md](CURRENT_STATE.md) — PB-1 (builder network/SG) open, PB-2 (line endings) resolved by `.gitattributes`, PB-3 (SSM snap) confirm-at-build |
+| Correct base-AMI provisioning (Docker Engine, Compose plugin, AWS CLI v2, `vm.max_map_count`, SSM verify) | Implemented | **B1** — committed `bcb9013`; statically validated; boundary = [DECISIONS.md](DECISIONS.md) D-011 |
+| Persistent Packer build network (`terraform/packer-build/`: VPC/subnet/IGW/route/SG/SSM instance profile) + Packer wiring (deterministic fail-closed `Project`+`Purpose`+`Name` filters, SSM interface, IMDSv2, explicit public IP) | Implemented | **PB-1 / [DECISIONS.md](DECISIONS.md) D-012** — code + `.terraform.lock.hcl`; `fmt`/`init`/`validate` pass locally; `terraform apply` of this root not yet run |
+| Validated AMI produced by the Packer workflow | Planned | Terraform + Packer `fmt`/`init`/`validate` **pass locally**. Still needs: `terraform apply` of `terraform/packer-build/` → reviewed **PB-4 caller IAM policy** → approved `packer build` → smoke test. PB-1/PB-2 resolved; PB-3 confirm-at-build; **PB-4 caller least-privilege IAM policy still open** (local toolchain done). |
 | Checked-in Wazuh stack artifacts (Compose + cert-gen + manager/indexer/dashboard config, deliberately pinned version) | Planned | **B3** |
 | S3 artifact publishing workflow | Planned | **B3**; depends on the bootstrap-lifecycle decision (Open decision #1/#2) |
 | ECR image mirror/publish workflow | Planned | **B2**; depends on the pinned version (Open decision #5) |
@@ -91,11 +92,13 @@ Nothing in Phase 2+ starts until this is done. Canonical blocker/gap detail:
 
 ### Phase 1 exit criteria
 
-A **recorded** run of: Packer build (smoke-tested AMI) → `terraform apply` → SSM shell into
-the instance → SSM port-forward to a healthy dashboard (manager + indexer + dashboard up) →
-`terraform destroy` → verified cleanup — with [RUNBOOK.md](RUNBOOK.md) updated to the real
-commands used, the bootstrap-lifecycle and persistence decisions recorded in
-[DECISIONS.md](DECISIONS.md), and [CURRENT_STATE.md](CURRENT_STATE.md) updated.
+A **recorded** run of: `terraform apply` of `terraform/packer-build/` (persistent, one-time)
+→ Packer build (smoke-tested AMI) → `terraform apply` of `terraform/wazuh-project/` → SSM
+shell into the instance → SSM port-forward to a healthy dashboard (manager + indexer +
+dashboard up) → `terraform destroy` of the runtime only → verified cleanup — with
+[RUNBOOK.md](RUNBOOK.md) updated to the real commands used, the bootstrap-lifecycle and
+persistence decisions recorded in [DECISIONS.md](DECISIONS.md), and
+[CURRENT_STATE.md](CURRENT_STATE.md) updated.
 
 ---
 

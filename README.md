@@ -23,7 +23,8 @@ cost-controlled** by design.
 | 3 private immutable ECR repos (manager / indexer / dashboard) | **Partial** | Created empty; nothing publishes images |
 | Private S3 artifact bucket (SSE-S3, public access blocked) | **Partial** | Created empty; no Wazuh artifact set checked in / published |
 | Wazuh EC2 Terraform definition + templated user-data | **Partial** | No security group, no root-volume sizing, no IMDSv2 enforcement, no outputs |
-| Packer Ubuntu 24.04 AMI definition | **Partial** | Provisioner script currently holds runtime logic, not bake-time setup |
+| Packer Ubuntu 24.04 AMI definition + bake-time provisioner | **Partial** | Provisioner is correct host-prereq setup (B1 done); never built / not validated |
+| Persistent Packer build network (`terraform/packer-build/`) | **Partial** | VPC/subnet/IGW/SG/SSM instance profile in code (D-012); not applied |
 | End-to-end Wazuh deploy validated via SSM | **Not done** | No evidence of `terraform apply` / Packer build |
 | Multi-account model (management / security / lab) | **Planned** | Single account, single provider today |
 | CloudTrail, Security Hub, GuardDuty, Config, CloudWatch | **Planned** | Not present |
@@ -128,12 +129,14 @@ README.md                     project entry point (this file)
 AGENTS.md                     contributor guide — reading order, source-of-truth, handoff rules
 CLAUDE.md                     tool-specific instruction file (defers to AGENTS.md)
 docs/                         project record (charter, architecture, state, roadmap, decisions, runbook)
-packer/                       Ubuntu 24.04 Wazuh AMI build (Partial)
-  wazuh-ami.pkr.hcl
+packer/                       Ubuntu 24.04 Wazuh AMI build (Partial - never built)
+  wazuh-ami.pkr.hcl                 source wired to the persistent build network (D-012)
   variables.pkr.hcl
-  scripts/install-wazuh-base.sh   (Partial - see blocker B1)
-terraform/wazuh-project/      the only Terraform root module (private Wazuh foundation)
+  scripts/install-wazuh-base.sh     bake-time host provisioner (B1 done)
+terraform/wazuh-project/      Terraform root - disposable Wazuh runtime
   providers.tf variables.tf networking.tf endpoints.tf roles.tf ecr.tf storage.tf ec2.tf
-  main.tf outputs.tf              (empty placeholders)
-  scripts/install-wazuh.sh.tftpl  EC2 user-data template
+  outputs.tf                        (empty placeholder)
+  scripts/install-wazuh.sh.tftpl    EC2 user-data template
+terraform/packer-build/       Terraform root - persistent Packer build network (D-012)
+  providers.tf variables.tf network.tf iam.tf outputs.tf
 ```

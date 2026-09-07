@@ -70,8 +70,10 @@ truth for what exists.
   destroy environments after validation.
 - **Do not make public infrastructure the default.** No ALB / public IP / public dashboard
   for administration. SSM is the access path.
-- **Avoid unnecessary abstractions.** One Terraform root module until there's a concrete
-  reason to split. No speculative modules/wrappers.
+- **Avoid unnecessary abstractions.** Add a Terraform root only when there's a concrete
+  reason (the two that exist — `terraform/wazuh-project/` and `terraform/packer-build/` —
+  are justified by materially different lifecycles: [docs/DECISIONS.md](docs/DECISIONS.md)
+  D-012). No speculative modules/wrappers.
 - **Do not deploy or spend without being asked.** No `terraform apply`/`destroy`, Packer
   build, ECR push, or other AWS mutation unless the task explicitly calls for it.
 
@@ -121,7 +123,7 @@ here.**
 | Region | `us-east-2` · VPC `10.0.0.0/16` · private subnet `10.0.1.0/24` |
 | Access model | AWS Systems Manager (Session Manager + port forwarding); no public admin |
 | Lifecycle | deploy → test → validate → document → destroy |
-| Only Terraform module | [terraform/wazuh-project/](terraform/wazuh-project/) |
+| Terraform roots | [terraform/wazuh-project/](terraform/wazuh-project/) (disposable Wazuh runtime) · [terraform/packer-build/](terraform/packer-build/) (persistent Packer build network — D-012) |
 | Current phase / next task / blockers / open decisions | **See [docs/CURRENT_STATE.md](docs/CURRENT_STATE.md)** |
 | Roadmap + status model | [docs/ROADMAP.md](docs/ROADMAP.md) |
 | Not part of the MVP at all | malware-analysis pipeline, vulnerability-management pipeline (possible future expansion — [docs/PROJECT_CHARTER.md](docs/PROJECT_CHARTER.md)) |

@@ -3,3 +3,10 @@
 # them when run on Linux (e.g. the Packer provisioner: `/bin/bash^M`).
 *.sh    text eol=lf
 *.tftpl text eol=lf
+
+
+# Guarantee LF line endings for project source/config files used from Linux/WSL.
+*.sh      text eol=lf
+*.tftpl   text eol=lf
+*.tf      text eol=lf
+*.hcl     text eol=lf

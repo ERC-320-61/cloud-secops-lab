@@ -213,3 +213,81 @@
   runtime pieces the AMI intentionally omits. Evidence:
   [packer/scripts/install-wazuh-base.sh](../packer/scripts/install-wazuh-base.sh),
   [scripts/install-wazuh.sh.tftpl](../terraform/wazuh-project/scripts/install-wazuh.sh.tftpl).
+
+---
+
+## D-012 — Persistent dedicated Packer build network; ephemeral builder via SSM
+
+- **Status:** Accepted
+- **Resolves:** the open pre-build item **PB-1** (temporary-builder networking) in
+  [CURRENT_STATE.md](CURRENT_STATE.md) — it is no longer an unresolved design question
+  (implementation and apply/validation still pending).
+- **Context:** The Packer source previously relied on the account's default VPC and on
+  ambient public-IP / temporary-security-group behaviour. That is undependable (many
+  accounts have no default VPC) and gives the builder an implicit public SSH surface. The
+  AMI bake needs outbound Internet (Docker apt repo, AWS CLI v2 installer); D-002 keeps the
+  Wazuh *runtime* private with no NAT.
+- **Decision:**
+  - **A dedicated, persistent Packer build network** exists as its **own Terraform root** at
+    [terraform/packer-build/](../terraform/packer-build/), separate from the disposable
+    Wazuh runtime root. Persistent resources: one build VPC (`10.10.0.0/24`, non-overlapping
+    with the runtime `10.0.0.0/16`), one build subnet, an Internet Gateway + default route,
+    a dedicated builder security group, and a dedicated EC2 IAM role / instance profile for
+    SSM. These stay between builds and are **not** part of the Wazuh
+    deploy→test→validate→destroy cycle.
+  - **The build subnet does not auto-assign public IPs** (`map_public_ip_on_launch = false`).
+  - **The ephemeral builder is Packer-managed**: Packer launches it, it receives an
+    ephemeral public IPv4 **explicitly requested** by the Packer config
+    (`associate_public_ip_address = true`) for outbound access only, and Packer terminates
+    it after the AMI is produced.
+  - **No public administrative ingress.** The builder security group has **zero ingress
+    rules**. Packer manages the builder through **AWS Systems Manager Session Manager**
+    (`ssh_interface = "session_manager"`; the SSH communicator is tunnelled through SSM).
+  - **IMDSv2 is required** on the temporary builder.
+  - Packer locates the persistent resources by **deterministic tag filters** — `Project` +
+    `Purpose` identify the packer-build lifecycle boundary, and a **resource-specific
+    `Name`** (`cloud-secops-lab-packer-build-vpc` / `-subnet` / `-sg`) pins each lookup to
+    one resource — and the instance profile by its exact name
+    (`cloud-secops-lab-packer-build-ssm-profile`). No generated `vpc-…` / `subnet-…` /
+    `sg-…` IDs in source control. These filters **identify** the intended resources; they
+    are not a uniqueness guarantee, so the design is **fail-closed**: `subnet_filter` has no
+    `most_free` / `random` fallback and the Amazon builder errors if any filter matches more
+    than one resource rather than silently choosing.
+- **Secure-by-design properties** (controls-aligned language, not a compliance claim):
+  least-privilege builder identity (SSM-only); controlled, minimal external egress
+  (TCP 80/443 only, no all-protocol rule); no unnecessary inbound administrative exposure;
+  a dedicated build segment separate from runtime; ephemeral build compute; an explicit,
+  documented infrastructure lifecycle; and an auditable, reproducible build path.
+- **Relationship to other decisions:**
+  - **D-002 (no NAT):** unaffected. The IGW here is confined to the isolated build VPC and
+    carries no hourly/data-processing charge; the Wazuh runtime subnet still has no IGW/NAT.
+  - **D-006 (temporary lifecycle):** the Wazuh runtime is still deploy→test→validate→destroy.
+    The build network is a **deliberate, bounded exception** — it is only no-hourly-cost
+    control-plane objects (VPC/subnet/IGW/route table/SG/IAM); the cost-bearing pieces
+    (builder EC2, its EBS, its temporary public IPv4, the resulting AMI/snapshot storage)
+    remain ephemeral or are normal AMI storage.
+  - **D-008 (minimal footprint / one root until a concrete reason):** this is that concrete
+    reason. The materially different lifecycle (persistent vs. disposable) justifies the
+    second Terraform root. It does **not** license splitting the still-open ECR/S3
+    artifact-persistence question.
+- **Consequences:**
+  - `terraform/packer-build/` must be `terraform apply`-d before the first `packer build`.
+  - The Packer **caller** (whichever user/role eventually runs `packer build`) needs a
+    **least-privilege policy that must be reviewed before build authorization (PB-4)** —
+    scoped to: the amazon-ebs builder EC2/AMI/snapshot lifecycle this config uses; the
+    describe/discovery calls the source-AMI and vpc/subnet/sg filters make; **`iam:PassRole`
+    restricted to `cloud-secops-lab-packer-build-ssm-role`**; SSM SSH-session use via the
+    `AWS-StartSSHSession` document (`ssm:StartSession` + a clean `ssm:TerminateSession`);
+    and `ec2:DescribeInstanceStatus` (Packer uses it when closing the Session Manager
+    tunnel). **Not** `AdministratorAccess` or `ec2:*`. It is **not defined in this repo** —
+    there is no designated caller principal in repository evidence. See
+    [RUNBOOK.md](RUNBOOK.md) and [CURRENT_STATE.md](CURRENT_STATE.md) (PB-4).
+  - The workstation running Packer needs Terraform, Packer, AWS CLI v2 and the **AWS
+    Session Manager plugin** on PATH — verified present on the operator workstation
+    (2026-09-06).
+  - Implemented in code and **statically validated** — `terraform fmt/init/validate` and
+    `packer fmt/init/validate` all pass locally; `terraform/packer-build/.terraform.lock.hcl`
+    is present and intended for source control with the PB-1 commit. **Not yet applied or
+    built** — no `terraform apply`, no `packer build`.
+  - Evidence: [terraform/packer-build/](../terraform/packer-build/),
+    [packer/wazuh-ami.pkr.hcl](../packer/wazuh-ami.pkr.hcl).

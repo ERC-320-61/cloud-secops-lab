@@ -14,27 +14,68 @@
 | Field | Value |
 | --- | --- |
 | Last updated | 2026-09-06 |
-| Updated by | Phase 1 / B1 — corrected the Packer base-AMI provisioning and supporting documentation; no AWS build/deployment performed |
+| Updated by | Phase 1 / PB-1 — persistent Packer build network (D-012) + Packer wiring + fail-closed selectors, then a state-sync pass recording successful local Terraform/Packer/toolchain validation; no AWS build/apply performed |
 | Active branch | `feat/phase1-wazuh-bootstrap` |
 | Default branch | `main` |
-| Baseline | `305bb46` — *docs: professionalize public project documentation* (2026-09-06) |
+| Baseline | `bcb9013` — *feat: implement Wazuh base AMI provisioning* (on top of `305bb46` *docs: professionalize public project documentation*) |
 | Prior milestone | `333460c` — *Add Wazuh AWS infrastructure foundation* |
-| Most recent infrastructure work | Phase 1 / B1 base-AMI provisioning implemented in code; AMI has not yet been built or validated |
+| Most recent infrastructure work | Phase 1 / PB-1: `terraform/packer-build/` (persistent build VPC/subnet/IGW/route/SG/SSM instance profile) + Packer source wired to it. **Statically validated locally** (Terraform + Packer fmt/init/validate all pass); **not applied, not built, not deployed.** B1 base-AMI provisioning (committed `bcb9013`) likewise not built. |
 | Current phase | **Phase 1 — Private Wazuh Foundation** |
-| Phase status | **IN PROGRESS** — B1 fixed in code; no build/deploy has run |
-| Validation status | No successful Packer build or end-to-end deployment is documented in the repository. Treat all infrastructure — including the repaired AMI script — as **unvalidated** until a build and smoke test succeed. |
+| Phase status | **IN PROGRESS** — B1 + PB-1 implemented in code and locally validated (`fmt`/`init`/`validate`); no `terraform apply` / `packer build` has run |
+| Validation status | Local static validation **passes** (see *Local validation* below). No `terraform apply`, `packer build`, AMI build, or end-to-end deployment has occurred — the build network and the AMI remain **not deployed / not operationally Validated**. |
+
+### Local validation (operator workstation, 2026-09-06)
+
+| Tool / command | Result |
+| --- | --- |
+| Terraform `v1.16.1` | available |
+| AWS CLI `2.36.37` | available |
+| Session Manager Plugin `1.2.835.0` | available |
+| Packer (local; version not recorded) | available |
+| `terraform -chdir=terraform/packer-build fmt -check` | **pass** |
+| `terraform -chdir=terraform/packer-build init` | **pass** — `hashicorp/aws v6.57.1` selected under `~> 6.57.0`; wrote `terraform/packer-build/.terraform.lock.hcl` |
+| `terraform -chdir=terraform/packer-build validate` | **pass** — "Success! The configuration is valid." |
+| `packer fmt -check .` (in `packer/`) | **pass** |
+| `packer init .` | **pass** — `github.com/hashicorp/amazon v1.8.2` installed |
+| `packer validate .` | **pass** — "The configuration is valid." |
+
+`terraform/packer-build/.terraform.lock.hcl` is intentional **source-controlled dependency
+metadata** — it is currently **untracked and will be included in the PB-1 commit**; it must
+stay in version control thereafter. `terraform/packer-build/.terraform/` and any provider
+binaries stay git-ignored (`.gitignore` covers them).
 
 ### Repository / working-tree note
 
-The Phase 1 / B1 implementation includes:
+Committed on this branch:
 
-- `packer/scripts/install-wazuh-base.sh` — rewritten as a true bake-time provisioner. It installs and verifies stable host prerequisites only: Docker Engine, Docker Compose plugin, AWS CLI v2, `vm.max_map_count=262144`, Docker boot/user configuration, and SSM-agent readiness. It contains no Wazuh runtime deployment logic.
-- `packer/wazuh-ami.pkr.hcl` — no behavioral change; documents the unresolved PB-1 temporary-builder networking prerequisite.
-- `.gitattributes` — enforces LF endings for `*.sh` and `*.tftpl`.
+- `bcb9013` — B1: `packer/scripts/install-wazuh-base.sh` rewritten as a true bake-time
+  provisioner (host prerequisites only — Docker + Compose plugin, AWS CLI v2,
+  `vm.max_map_count=262144`, Docker boot/user config, SSM-agent enable, verification block;
+  no Wazuh runtime logic); `.gitattributes` (LF for `*.sh` / `*.tftpl`).
 
-The B1 implementation has passed the available local/static checks but has **not** been exercised by a real `packer build`.
+Uncommitted working-tree changes from the PB-1 task:
 
-Always verify the actual local state with `git status` and `git diff` before continuing work.
+- `terraform/packer-build/` (new root) — `providers.tf`, `variables.tf`, `network.tf`,
+  `iam.tf`, `outputs.tf`, and `.terraform.lock.hcl` (dependency metadata — `hashicorp/aws
+  6.57.1` — present and intended for source control with the PB-1 commit). Persistent build
+  VPC `10.10.0.0/24`, one subnet
+  (`map_public_ip_on_launch = false`), IGW + default route, builder SG (no ingress; egress
+  TCP 80/443 only), builder IAM role + `AmazonSSMManagedInstanceCore` **only** + instance
+  profile. Resources carry deterministic `Name` tags
+  (`cloud-secops-lab-packer-build-{vpc,subnet,sg,igw,rt,ssm-role,ssm-profile}`).
+- `packer/wazuh-ami.pkr.hcl` — builder selects the build network by **deterministic,
+  fail-closed** filters (`tag:Project` + `tag:Purpose` + a resource-specific `tag:Name`;
+  `subnet_filter` has no `most_free`/`random`, so an ambiguous match fails the build),
+  attaches the dedicated instance profile, explicitly requests a public IPv4, uses
+  `ssh_interface = "session_manager"`, and requires IMDSv2.
+- `AGENTS.md`, `README.md`, `docs/ARCHITECTURE.md`, `docs/CURRENT_STATE.md`,
+  `docs/DECISIONS.md` (new D-012), `docs/ROADMAP.md`, `docs/RUNBOOK.md` — documentation for
+  the above, including this local-validation state-sync pass.
+- `terraform/wazuh-project/ecr.tf` — **pre-existing, unrelated** comment-only change; not
+  touched by this task. Preserve.
+
+Nothing has been `terraform apply`-d or `packer build`-t. Verify local state with
+`git status` / `git diff` before continuing.
 
 ---
 
@@ -70,6 +111,21 @@ validated.
 | Provider pinning: `hashicorp/aws ~> 6.57.0`, Terraform `>= 1.7.0`, region from `var.aws_region` | [providers.tf](../terraform/wazuh-project/providers.tf) |
 | Input variables (`project_name`, `aws_region`, `availability_zone`, `vpc_cidr`, `subnet_cidr`, `wazuh_ami_id`, `wazuh_instance_type`) | [variables.tf](../terraform/wazuh-project/variables.tf) |
 
+### Persistent Packer build network — `terraform/packer-build/` (new root, D-012)
+
+| Component | File(s) |
+| --- | --- |
+| Build VPC `10.10.0.0/24` (non-overlapping with runtime `10.0.0.0/16`), DNS support + hostnames | [network.tf](../terraform/packer-build/network.tf) |
+| One build subnet, `map_public_ip_on_launch = false` | [network.tf](../terraform/packer-build/network.tf) |
+| Internet Gateway + `0.0.0.0/0` route + association | [network.tf](../terraform/packer-build/network.tf) |
+| Builder security group — **no ingress**; egress TCP 80 + 443 to `0.0.0.0/0` only | [network.tf](../terraform/packer-build/network.tf) |
+| Builder IAM role (`cloud-secops-lab-packer-build-ssm-role`) + `AmazonSSMManagedInstanceCore` **only** + instance profile (`cloud-secops-lab-packer-build-ssm-profile`) | [iam.tf](../terraform/packer-build/iam.tf) |
+| Outputs (vpc/subnet/sg ids, instance-profile name, role ARN, Packer selector tags) | [outputs.tf](../terraform/packer-build/outputs.tf) |
+| Provider pinning matches the runtime root (`aws ~> 6.57.0`, TF `>= 1.7.0`) | [providers.tf](../terraform/packer-build/providers.tf) |
+
+Status: **Implemented in code, not applied.** `terraform apply` of this root is now a
+prerequisite for `packer build` (was PB-1).
+
 ---
 
 ## Incomplete components (Partial)
@@ -81,7 +137,7 @@ validated.
 | Wazuh EC2 instance | Resource with instance profile, private subnet, templated user-data ([ec2.tf](../terraform/wazuh-project/ec2.tf)) | No dedicated security group; no explicit `root_block_device`; no `metadata_options` (IMDSv2). Takes an explicit `var.wazuh_ami_id` (acceptable), but no validated AMI exists to supply |
 | Packer AMI build | `amazon-ebs` source, Ubuntu 24.04 filter, timestamped AMI name ([wazuh-ami.pkr.hcl](../packer/wazuh-ami.pkr.hcl)); provisioner script now implements bake-time host setup only ([install-wazuh-base.sh](../packer/scripts/install-wazuh-base.sh), B1 fixed) | Never built; no *Validated* AMI; pre-build prerequisites unmet (see B1 note below) |
 | EC2 user-data | Template does S3 sync + ECR login + `docker compose pull/up` + cert generation ([install-wazuh.sh.tftpl](../terraform/wazuh-project/scripts/install-wazuh.sh.tftpl)) | Depends on ECR images and S3 artifacts that don't exist; no health/wait/verification logic (the deleted `install-wazuh.sh` had a dashboard-wait loop) |
-| Terraform outputs | — | [outputs.tf](../terraform/wazuh-project/outputs.tf) and [main.tf](../terraform/wazuh-project/main.tf) are empty placeholders |
+| Terraform outputs | — | [outputs.tf](../terraform/wazuh-project/outputs.tf) is an empty placeholder |
 
 ---
 
@@ -112,7 +168,7 @@ These prevent a first successful deployment.
 
 | ID | Blocker | Detail |
 | --- | --- | --- |
-| ~~**B1**~~ | Packer bake provisioning was incorrect | **Fixed in code (2026-09-06, uncommitted).** [packer/scripts/install-wazuh-base.sh](../packer/scripts/install-wazuh-base.sh) was byte-identical to the runtime user-data template. It has been rewritten as a true bake-time provisioner: base packages → Docker Engine + `docker-compose-plugin` + `docker-buildx-plugin` + `containerd.io` from Docker's apt repo → Docker enabled at boot → `ubuntu` in the `docker` group → persisted `vm.max_map_count=262144` → **AWS CLI v2** (official installer, fresh `./aws/install`) → SSM agent enabled via snapd (`snap start --enable amazon-ssm-agent`, deb-unit fallback, hard-fail if absent) → cleanup → verification block (`docker --version`, `docker compose version`, **AWS CLI major version 2 asserted**, `sysctl -n vm.max_map_count` = 262144, docker-group membership, `systemctl is-enabled docker`). No Terraform template syntax, no S3/ECR/`docker compose pull\|up`, no Wazuh version. Boundary recorded as [DECISIONS.md](DECISIONS.md) D-011. **Still not built** — see *Pre-build prerequisites* and *completion gaps*. |
+| ~~**B1**~~ | Packer bake provisioning was incorrect | **Fixed in code (committed `bcb9013`).** [packer/scripts/install-wazuh-base.sh](../packer/scripts/install-wazuh-base.sh) was byte-identical to the runtime user-data template. It has been rewritten as a true bake-time provisioner: base packages → Docker Engine + `docker-compose-plugin` + `docker-buildx-plugin` + `containerd.io` from Docker's apt repo → Docker enabled at boot → `ubuntu` in the `docker` group → persisted `vm.max_map_count=262144` → **AWS CLI v2** (official installer, fresh `./aws/install`) → SSM agent enabled via snapd (`snap start --enable amazon-ssm-agent`, deb-unit fallback, hard-fail if absent) → cleanup → verification block (`docker --version`, `docker compose version`, **AWS CLI major version 2 asserted**, `sysctl -n vm.max_map_count` = 262144, docker-group membership, `systemctl is-enabled docker`). No Terraform template syntax, no S3/ECR/`docker compose pull\|up`, no Wazuh version. Boundary recorded as [DECISIONS.md](DECISIONS.md) D-011. **Still not built** — see *Pre-build prerequisites* and *completion gaps*. |
 | **B2** | No Wazuh ECR image mirror/publish workflow | The three repos exist but there is no working process to pull the upstream Wazuh manager/indexer/dashboard images at a pinned version and push them into the private repos. Without it, `docker compose pull` on the instance fails. |
 | **B3** | No complete Wazuh artifact set / S3 publish workflow | The repo contains no `docker-compose.yml`, `generate-indexer-certs.yml`, or manager/indexer/dashboard config, and nothing publishes such a set to `s3://<bucket>/wazuh/`. The `aws s3 sync` in user-data retrieves nothing and the stack has no definition to run. |
 
@@ -120,9 +176,10 @@ These prevent a first successful deployment.
 
 | # | Item | Status | Detail |
 | --- | --- | --- | --- |
-| PB-1 | Builder networking / SG design | **Open — decide before first build** | `packer/wazuh-ami.pkr.hcl` sets no `vpc_id` / `subnet_id` / `security_group_id`. Actual assumptions: Packer infers a default VPC/subnet; the bake needs outbound Internet (Docker apt repo + AWS CLI v2 installer); Packer uses a **public IP for SSH when one is available**, otherwise its normal behaviour may select the **private IP**, so the host running `packer build` must have a working network path to whichever SSH endpoint Packer selects; Packer also creates a **temporary security group** for the builder by default, whose SSH ingress must be reviewed. The temporary-builder network + SG design is unresolved. Not implemented here (out of B1 scope). |
-| PB-2 | Shell script line endings | **Resolved in code** | `.gitattributes` (new) forces `*.sh` and `*.tftpl` to LF regardless of `core.autocrlf`; `git check-attr` confirms `eol=lf` on `install-wazuh-base.sh` and `install-wazuh.sh.tftpl`, and both files are LF in the working tree. The uploaded-script behaviour will still be exercised naturally by the eventual `packer build`. |
-| PB-3 | SSM agent assumption | **Confirm at first build** | The script uses the SSM agent supplied by the Canonical Ubuntu base image — `snap start --enable amazon-ssm-agent` (with a deb systemd-unit fallback) — and **hard-fails the build** if no supported agent is present (SSM is the only admin path, D-001). No second install path was added. Confirm the snap is present on the first real build; if a future base image drops it, add an explicit install step rather than a parallel path. |
+| PB-1 | Builder networking / SG design | **Resolved by design (D-012); implemented in code and locally validated; not applied** | Accepted architecture: a persistent dedicated build network (`terraform/packer-build/`) + ephemeral SSM-managed builder. Packer wired to it with **deterministic, fail-closed** selectors (`tag:Project` + `tag:Purpose` + resource-specific `tag:Name`; `subnet_filter` has no `most_free`/`random`, so an ambiguous match aborts the build), the dedicated instance profile, explicit public IPv4, `ssh_interface = "session_manager"`, IMDSv2. Builder SG has **no ingress**. `terraform fmt/init/validate` and `packer fmt/init/validate` all pass locally (see *Local validation*). Remaining: `terraform apply` of `terraform/packer-build/` must run before `packer build`, and neither has been run. |
+| PB-2 | Shell script line endings | **Resolved in code** | `.gitattributes` (committed `bcb9013`) forces `*.sh` and `*.tftpl` to LF regardless of `core.autocrlf`; `git check-attr` confirms `eol=lf` on `install-wazuh-base.sh` and `install-wazuh.sh.tftpl`. Uploaded-script behaviour is still exercised by the eventual `packer build`. |
+| PB-3 | SSM agent assumption | **Confirm at first build** | The bake script uses the SSM agent supplied by the Canonical Ubuntu base image — `snap start --enable amazon-ssm-agent` (deb systemd-unit fallback) — and **hard-fails the build** if no supported agent is present (SSM is the only admin path, D-001). No second install path was added. Confirm the snap is present on the first real build. |
+| PB-4 | Packer-caller least-privilege IAM policy | **Open — the only remaining PB-4 item; review before build authorization; not repo code** | Local toolchain is **resolved** — Terraform `v1.16.1`, AWS CLI `2.36.37`, Session Manager Plugin `1.2.835.0`, and Packer are installed and verified (see *Local validation*). The remaining requirement is a security review: the principal that will run `packer build` needs a **least-privilege caller policy that must be deliberately defined and reviewed**, covering only the actual required operations — the amazon-ebs builder **EC2 lifecycle**; **AMI/snapshot** operations; **source-AMI and VPC/subnet/SG discovery**; **`iam:PassRole` restricted to `cloud-secops-lab-packer-build-ssm-role`**; **SSM SSH-session use via `AWS-StartSSHSession`**; the **session-lifecycle actions** needed for clean operation (`ssm:StartSession` + `ssm:TerminateSession`); and **`ec2:DescribeInstanceStatus`** (used when closing the SSM tunnel). **Not** `AdministratorAccess` / `ec2:*`. The repository does not yet designate the operator identity, so the caller policy/principal is **intentionally undefined** and is **not created in code**. See [RUNBOOK.md](RUNBOOK.md) step 1. |
 
 ### Phase 1 completion / hardening gaps
 
@@ -151,8 +208,9 @@ versioning / no TLS-only bucket policy · single-AZ subnet named `private_1` wit
 
 ### Artifact bootstrap sequencing
 
-Terraform (in the single root module) **creates** the ECR repositories and the S3 artifact
-bucket. The Wazuh EC2 user-data expects those destinations to **already be populated** at
+Terraform (the Wazuh runtime root, `terraform/wazuh-project/`) **creates** the ECR
+repositories and the S3 artifact bucket. The Wazuh EC2 user-data expects those destinations
+to **already be populated** at
 first boot (`aws s3 sync s3://<bucket>/wazuh/`, `docker compose pull` from the private
 registry). So the destinations cannot be populated until Terraform has created them, but the
 instance should not first-boot until the artifacts/images are present.
@@ -205,15 +263,25 @@ Recommended sub-sequence (one coherent unit of Phase 1 work):
 0. **Decide the bootstrap lifecycle** (see *Unresolved lifecycle issues* → Artifact bootstrap
    sequencing) and **pick a Wazuh version to pin** (Open decision #5). Everything below
    depends on these.
-1. **Fix the Packer bake script (B1).** ✅ *Done in code (uncommitted on
-   `feat/phase1-wazuh-bootstrap`).* See the struck-through B1 row above and D-011.
-2. **➡ NEXT: build and smoke-test the AMI** — *requires explicit approval; creates AWS
-   resources.* First settle **PB-1** (builder VPC/subnet + temporary security-group design)
-   and re-confirm **PB-3** (SSM snap present on the base image); **PB-2 is already resolved
-   in code**. Then `cd packer && packer init . && packer validate . && packer build .`;
-   launch a throwaway instance from the result and confirm `docker`, `docker compose`,
-   `aws` reports **major version 2**, `sysctl -n vm.max_map_count` = 262144, `ubuntu` in
-   `docker` group, SSM agent active; terminate it. Only then is the AMI *Validated*.
+1. **Fix the Packer bake script (B1).** ✅ *Done in code (committed `bcb9013`).* See the
+   struck-through B1 row above and D-011.
+1a. **Implement the persistent Packer build network (PB-1 / D-012).** ✅ *Done in code
+   (uncommitted `terraform/packer-build/` + `packer/wazuh-ami.pkr.hcl` wiring) and
+   **locally validated** — Terraform + Packer `fmt`/`init`/`validate` all pass.*
+2. **➡ NEXT: apply the build network, then build and smoke-test the AMI** — *requires
+   explicit approval; creates AWS resources.*
+   - Define + review the **PB-4 least-privilege Packer-caller IAM policy** (only remaining
+     PB-4 item — local toolchain is done); re-confirm **PB-3** (SSM snap on the base
+     image). **PB-1/PB-2 are resolved.**
+   - `terraform -chdir=terraform/packer-build apply` (init/validate already pass;
+     creates the persistent build VPC/subnet/IGW/SG/instance profile — no hourly cost).
+   - `cd packer && packer build .` (init/validate already pass).
+   - Launch a throwaway instance from the resulting AMI and confirm `docker`,
+     `docker compose`, `aws` reports **major version 2**, `sysctl -n vm.max_map_count` =
+     262144, `ubuntu` in `docker` group, SSM agent active; terminate it. Only then is the
+     AMI *Validated*.
+   - The build network is **persistent** — do **not** `terraform destroy` it as part of the
+     Wazuh runtime lifecycle (D-012).
 3. **Provide the Wazuh artifact set (B3).** Add a checked-in `wazuh/` source directory
    (Compose file, `generate-indexer-certs.yml`, manager/indexer/dashboard config) at the
    pinned version, plus a defined publish path to `s3://<bucket>/wazuh/` consistent with the
@@ -255,7 +323,8 @@ architecture.
 
 | Path | Role |
 | --- | --- |
-| [terraform/wazuh-project/](../terraform/wazuh-project/) | The only Terraform root module |
+| [terraform/wazuh-project/](../terraform/wazuh-project/) | Terraform root — **disposable Wazuh runtime** |
+| [terraform/packer-build/](../terraform/packer-build/) | Terraform root — **persistent Packer build network** (D-012); apply before `packer build`, do not destroy with the runtime |
 | [terraform/wazuh-project/ec2.tf](../terraform/wazuh-project/ec2.tf) | Wazuh instance (hardening gaps here) |
 | [terraform/wazuh-project/endpoints.tf](../terraform/wazuh-project/endpoints.tf) | VPC endpoints + endpoint SG |
 | [terraform/wazuh-project/roles.tf](../terraform/wazuh-project/roles.tf) | EC2 IAM |
@@ -288,8 +357,16 @@ logic and an old Wazuh version and must not be copied wholesale.
   hourly cost while deployed. The environment is temporary by design — always
   `terraform destroy` after validating (D-006), subject to the persistence boundary that
   Open decisions #1–#2 will define.
-- **B1 status:** the Packer provisioner is corrected **in code only**. "AMI provisioning
-  implemented" ≠ "AMI Validated". Nothing is built until an approved `packer build` +
-  smoke test succeeds (next task step 2). Do not mark B1 fully closed until then.
+- **B1 status:** the Packer provisioner is corrected **in code only** (`bcb9013`). "AMI
+  provisioning implemented" ≠ "AMI Validated". Nothing is built until an approved
+  `packer build` + smoke test succeeds. Do not mark B1 fully closed until then.
+- **PB-1 / D-012 status:** the persistent build network is **implemented in code, not
+  applied**. It is a separate Terraform root (`terraform/packer-build/`) with a **persistent**
+  lifecycle — it is deliberately outside the Wazuh runtime deploy→…→destroy cycle. Its
+  resources carry no hourly cost (VPC/subnet/IGW/route/SG/IAM only). The Wazuh runtime root
+  is unchanged and still disposable.
+- **Two Terraform roots now.** This is the first justified split (D-008 → D-012). It does
+  **not** license moving the ECR/S3 resources or resolving the artifact-persistence /
+  bootstrap-ordering open decisions — those remain open and out of scope here.
 - When you finish a substantial task, update this file (Snapshot, milestone, blockers/gaps,
   open decisions, next task) and any other doc whose assumptions changed.
