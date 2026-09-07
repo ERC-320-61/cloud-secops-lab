@@ -280,3 +280,4 @@ See [DECISIONS.md](DECISIONS.md) for full records. Summary:
 | D-010 | Artifact bucket encryption — SSE-S3 today; SSE-S3 vs. CMK for Phase 1 is open. | Proposed |
 | D-011 | Custom AMI = stable host prerequisites only; runtime layer owns Wazuh deployment state (version, images, config, certs). | Accepted |
 | D-012 | Persistent dedicated Packer build network (own Terraform root); ephemeral builder with explicit public egress, no public admin ingress, SSM Session Manager management, IMDSv2; deterministic fail-closed resource selection. Resolves open item PB-1. | Accepted |
+| D-013 | Least-privilege IAM identity for running Packer: `cloud-secops-lab-packer-execution-role` trusted only by the `CloudGuardOperator` IAM Identity Center role (resilient `ArnLike` pattern), assumed by Packer; separate from the builder instance role; bootstrap apply via `AdministratorAccess`. Resolves the security part of PB-4. | Accepted |

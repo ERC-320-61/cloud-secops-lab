@@ -28,8 +28,13 @@ output "build_instance_profile_name" {
 }
 
 output "build_ssm_role_arn" {
-  description = "ARN of the builder IAM role — the reviewed Packer-caller policy scopes iam:PassRole to exactly this ARN"
+  description = "ARN of the builder IAM role — the Packer execution policy scopes iam:PassRole to exactly this ARN"
   value       = aws_iam_role.build_ssm.arn
+}
+
+output "packer_execution_role_arn" {
+  description = "IAM role the operator assumes to run `packer build` — set as the Packer var packer_execution_role_arn"
+  value       = aws_iam_role.packer_execution.arn
 }
 
 output "packer_selectors" {

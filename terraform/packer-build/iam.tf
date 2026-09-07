@@ -10,16 +10,10 @@
 # The builder is intentionally NOT granted: EC2 provisioning, ECR/S3, Wazuh
 # runtime, Security Hub / GuardDuty, or any wildcard application permissions.
 #
-# The Packer CALLER (whatever user/role eventually runs `packer build`) needs a
-# separate least-privilege policy that must be reviewed before build
-# authorization (PB-4). It covers: the amazon-ebs builder EC2/AMI/snapshot
-# lifecycle this config actually uses; the describe/discovery calls the source
-# AMI + vpc/subnet/sg filters make; `iam:PassRole` restricted to the role below;
-# SSM SSH-session use via the AWS-StartSSHSession document (StartSession +
-# clean TerminateSession); and `ec2:DescribeInstanceStatus` (Packer uses it
-# when closing the Session Manager tunnel). It is NOT AdministratorAccess or
-# `ec2:*`, and it is NOT defined here — there is no designated caller principal
-# in the repo yet. See docs/RUNBOOK.md and docs/CURRENT_STATE.md (PB-4).
+# The Packer EXECUTION role (the identity `packer build` assumes) is a separate,
+# least-privilege role defined in packer-execution-role.tf (PB-4). This builder
+# role is passed to it only via `iam:PassRole` scoped to this exact ARN. The two
+# roles are kept distinct.
 ############################################################
 
 resource "aws_iam_role" "build_ssm" {

@@ -76,8 +76,9 @@ Nothing in Phase 2+ starts until this is done. Canonical blocker/gap detail:
 | Item | Status | Blocker / note |
 | --- | --- | --- |
 | Correct base-AMI provisioning (Docker Engine, Compose plugin, AWS CLI v2, `vm.max_map_count`, SSM verify) | Implemented | **B1** — committed `bcb9013`; statically validated; boundary = [DECISIONS.md](DECISIONS.md) D-011 |
-| Persistent Packer build network (`terraform/packer-build/`: VPC/subnet/IGW/route/SG/SSM instance profile) + Packer wiring (deterministic fail-closed `Project`+`Purpose`+`Name` filters, SSM interface, IMDSv2, explicit public IP) | Implemented | **PB-1 / [DECISIONS.md](DECISIONS.md) D-012** — code + `.terraform.lock.hcl`; `fmt`/`init`/`validate` pass locally; `terraform apply` of this root not yet run |
-| Validated AMI produced by the Packer workflow | Planned | Terraform + Packer `fmt`/`init`/`validate` **pass locally**. Still needs: `terraform apply` of `terraform/packer-build/` → reviewed **PB-4 caller IAM policy** → approved `packer build` → smoke test. PB-1/PB-2 resolved; PB-3 confirm-at-build; **PB-4 caller least-privilege IAM policy still open** (local toolchain done). |
+| Persistent Packer build network (`terraform/packer-build/`: VPC/subnet/IGW/route/SG/SSM instance profile) + Packer wiring (deterministic fail-closed `Project`+`Purpose`+`Name` filters, SSM interface, IMDSv2, explicit public IP) | Implemented | **PB-1 / [DECISIONS.md](DECISIONS.md) D-012** — committed `d790992`; `fmt`/`init`/`validate` pass locally; `terraform apply` of this root not yet run |
+| Least-privilege IAM identity for running Packer (`cloud-secops-lab-packer-execution-role` + inline policy; `CloudGuardOperator` SSO trust; Packer `assume_role`) | Implemented | **PB-4 / [DECISIONS.md](DECISIONS.md) D-013** — in code (this branch), not re-validated (no local `terraform`/`packer`), **role not created in AWS**, policy not validated |
+| Validated AMI produced by the Packer workflow | Planned | Still needs: re-run `terraform`/`packer` `fmt`/`validate` → `terraform apply` of `terraform/packer-build/` (bootstrap, `AdministratorAccess`) → `packer build` (assumes the execution role) → smoke test. B1/PB-1/PB-2 resolved; PB-3 confirm-at-build; **PB-4 in code, pending apply + first build (the real permission test)**. |
 | Checked-in Wazuh stack artifacts (Compose + cert-gen + manager/indexer/dashboard config, deliberately pinned version) | Planned | **B3** |
 | S3 artifact publishing workflow | Planned | **B3**; depends on the bootstrap-lifecycle decision (Open decision #1/#2) |
 | ECR image mirror/publish workflow | Planned | **B2**; depends on the pinned version (Open decision #5) |
@@ -92,8 +93,10 @@ Nothing in Phase 2+ starts until this is done. Canonical blocker/gap detail:
 
 ### Phase 1 exit criteria
 
-A **recorded** run of: `terraform apply` of `terraform/packer-build/` (persistent, one-time)
-→ Packer build (smoke-tested AMI) → `terraform apply` of `terraform/wazuh-project/` → SSM
+A **recorded** run of: `terraform apply` of `terraform/packer-build/` (persistent, one-time,
+bootstrap via `AdministratorAccess` — creates the build network **and** the Packer execution
+role) → `AWS_PROFILE=cloudguard packer build` (assumes the execution role; smoke-tested AMI)
+→ `terraform apply` of `terraform/wazuh-project/` → SSM
 shell into the instance → SSM port-forward to a healthy dashboard (manager + indexer +
 dashboard up) → `terraform destroy` of the runtime only → verified cleanup — with
 [RUNBOOK.md](RUNBOOK.md) updated to the real commands used, the bootstrap-lifecycle and

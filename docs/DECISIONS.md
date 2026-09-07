@@ -291,3 +291,73 @@
     built** — no `terraform apply`, no `packer build`.
   - Evidence: [terraform/packer-build/](../terraform/packer-build/),
     [packer/wazuh-ami.pkr.hcl](../packer/wazuh-ami.pkr.hcl).
+
+---
+
+## D-013 — Least-privilege IAM identity for running Packer (PB-4)
+
+- **Status:** Accepted
+- **Resolves:** the security portion of pre-build item **PB-4** in
+  [CURRENT_STATE.md](CURRENT_STATE.md) (the design is settled; AWS apply and a real build
+  are still pending).
+- **Context:** Human access to the CloudGuard AWS account is via **IAM Identity Center**
+  (instance in `us-east-2`). The normal CLI identity is the **`CloudGuardOperator`**
+  permission set, which resolves to an `AWSReservedSSO_CloudGuardOperator_<suffix>` role
+  whose suffix is regenerated on every permission-set re-provisioning. Packer needs more
+  than SSM but far less than the operator's day-to-day access, and the credentials it uses
+  must be attributable and bounded. No AWS account ID is committed to source — Terraform
+  discovers it (`data.aws_caller_identity`).
+- **Decision:**
+  - **Access model:**
+
+    | Layer | Identity |
+    | --- | --- |
+    | Human access | IAM Identity Center |
+    | Normal CloudGuard access | `CloudGuardOperator` permission set |
+    | Privileged build workflow | `CloudGuardOperator` → `cloud-secops-lab-packer-execution-role` |
+    | Bootstrap administration | an `AdministratorAccess` permission set — deliberate, one-off use only |
+
+  - **`cloud-secops-lab-packer-execution-role`** (new, in
+    [terraform/packer-build/packer-execution-role.tf](../terraform/packer-build/packer-execution-role.tf))
+    is the identity `packer build` assumes. Its **trust policy** uses the AWS-recommended
+    resilient Identity Center pattern: `Principal` = `arn:aws:iam::<account>:root` (account
+    from `data.aws_caller_identity.current.account_id`) with a `Condition ArnLike` on
+    `aws:PrincipalArn` matching
+    `…:role/aws-reserved/sso.amazonaws.com/<identity_center_region>/AWSReservedSSO_<operator_permission_set_name>_*`.
+    The generated suffix is **never hard-coded**; the account ID is **discovered at apply
+    time** (no account ID in source); `identity_center_region` and
+    `operator_permission_set_name` are Terraform variables (defaults `us-east-2` /
+    `CloudGuardOperator`). It does **not** trust arbitrary users, `AdministratorAccess`, all
+    account roles, or external accounts.
+  - Its **inline permission policy** is derived from the actual `amazon-ebs` config
+    ([packer/wazuh-ami.pkr.hcl](../packer/wazuh-ami.pkr.hcl)) — EC2 discovery, one-builder
+    lifecycle, EBS-AMI creation, a temporary SSH key pair, `iam:PassRole` **only** on
+    `cloud-secops-lab-packer-build-ssm-role` (`iam:PassedToService = ec2.amazonaws.com`),
+    `iam:GetInstanceProfile` on the builder profile, and SSM SSH-session actions. **Not**
+    granted: `ec2:*`, security-group create/modify/authorize, spot/fleet, KMS, ECR/S3
+    application access, Security Hub/GuardDuty, Terraform-management, or IAM
+    role create/delete. Full action list in [CURRENT_STATE.md](CURRENT_STATE.md) PB-4.
+  - **The builder instance role** (`cloud-secops-lab-packer-build-ssm-role`,
+    `AmazonSSMManagedInstanceCore` only) stays **separate** from the execution role.
+  - **Packer wiring:** `packer/wazuh-ami.pkr.hcl` has an `assume_role` block referencing
+    `var.packer_execution_role_arn`, which is **required and has no default** — the operator
+    supplies it from the Terraform output
+    (`PKR_VAR_packer_execution_role_arn="$(terraform -chdir=terraform/packer-build output -raw packer_execution_role_arn)"`).
+    Base credentials come from the operator's profile (`AWS_PROFILE=cloudguard` /
+    `--profile cloudguard` / active SSO session). No keys, secrets, usernames, or account
+    IDs are embedded.
+- **Bootstrap boundary:** the execution role has **no** permission to create or modify its
+  own IAM role, or the build VPC / subnet / IGW / SG / route table. `terraform apply` of
+  `terraform/packer-build/` (which creates all of that, including the execution role) is
+  bootstrap infrastructure and may be run deliberately with the `AdministratorAccess`
+  permission set. After that, normal Packer execution uses the dedicated role. This task
+  does **not** create a general Terraform-execution role.
+- **Consequences:** Implemented in code and statically reviewed; **the role does not exist
+  in AWS**, the policy is **not operationally validated**, no `packer build` has run, and
+  no AMI is Validated. First `packer build` is the real test of the derived permission set
+  (see PB-4 for the permissions flagged as "verify at first build").
+- **Evidence:**
+  [terraform/packer-build/packer-execution-role.tf](../terraform/packer-build/packer-execution-role.tf),
+  [terraform/packer-build/variables.tf](../terraform/packer-build/variables.tf),
+  [packer/build-identity.pkr.hcl](../packer/build-identity.pkr.hcl),
+  [packer/wazuh-ami.pkr.hcl](../packer/wazuh-ami.pkr.hcl).

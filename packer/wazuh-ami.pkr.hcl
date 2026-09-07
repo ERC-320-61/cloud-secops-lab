@@ -37,6 +37,16 @@ source "amazon-ebs" "wazuh" {
   instance_type = var.instance_type
   ssh_username  = "ubuntu"
 
+  # Start from the operator's normal credentials (an active CloudGuardOperator
+  # IAM Identity Center session — e.g. AWS_PROFILE=cloudguard), then assume the
+  # dedicated least-privilege execution role (terraform/packer-build/, PB-4) for
+  # every AWS operation. No keys or human usernames are embedded. See
+  # packer/build-identity.pkr.hcl and docs/DECISIONS.md D-013.
+  assume_role {
+    role_arn     = var.packer_execution_role_arn
+    session_name = "cloudguard-packer-build"
+  }
+
   ami_name = "cloud-secops-wazuh-{{timestamp}}"
 
   source_ami_filter {
