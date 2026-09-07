@@ -213,15 +213,19 @@
   runtime pieces the AMI intentionally omits. Evidence:
   [packer/scripts/install-wazuh-base.sh](../packer/scripts/install-wazuh-base.sh),
   [scripts/install-wazuh.sh.tftpl](../terraform/wazuh-project/scripts/install-wazuh.sh.tftpl).
+- **Validated (2026-09-07):** the first successful build + AMI smoke test confirmed the base
+  image carries exactly the intended host prerequisites (Docker 29.8.0, Docker Compose
+  v5.5.1, AWS CLI v2.36.40, `vm.max_map_count = 262144`, Docker enabled, `ubuntu` in the
+  `docker` group, `amazon-ssm-agent` enabled + active) and no Wazuh deployment state.
 
 ---
 
 ## D-012 — Persistent dedicated Packer build network; ephemeral builder via SSM
 
 - **Status:** Accepted
-- **Resolves:** the open pre-build item **PB-1** (temporary-builder networking) in
-  [CURRENT_STATE.md](CURRENT_STATE.md) — it is no longer an unresolved design question
-  (implementation and apply/validation still pending).
+- **Resolves:** pre-build item **PB-1** (temporary-builder networking) — **COMPLETE**:
+  implemented, locally validated, `terraform apply`-d, and exercised by a successful
+  `packer build`.
 - **Context:** The Packer source previously relied on the account's default VPC and on
   ambient public-IP / temporary-security-group behaviour. That is undependable (many
   accounts have no default VPC) and gives the builder an implicit public SSH surface. The
@@ -272,23 +276,19 @@
     artifact-persistence question.
 - **Consequences:**
   - `terraform/packer-build/` must be `terraform apply`-d before the first `packer build`.
-  - The Packer **caller** (whichever user/role eventually runs `packer build`) needs a
-    **least-privilege policy that must be reviewed before build authorization (PB-4)** —
-    scoped to: the amazon-ebs builder EC2/AMI/snapshot lifecycle this config uses; the
-    describe/discovery calls the source-AMI and vpc/subnet/sg filters make; **`iam:PassRole`
-    restricted to `cloud-secops-lab-packer-build-ssm-role`**; SSM SSH-session use via the
-    `AWS-StartSSHSession` document (`ssm:StartSession` + a clean `ssm:TerminateSession`);
-    and `ec2:DescribeInstanceStatus` (Packer uses it when closing the Session Manager
-    tunnel). **Not** `AdministratorAccess` or `ec2:*`. It is **not defined in this repo** —
-    there is no designated caller principal in repository evidence. See
-    [RUNBOOK.md](RUNBOOK.md) and [CURRENT_STATE.md](CURRENT_STATE.md) (PB-4).
+  - The Packer **caller** runs as a dedicated least-privilege execution role — see **D-013**
+    (PB-4, COMPLETE). It is scoped to: the amazon-ebs builder EC2/AMI lifecycle this config
+    uses; the describe/discovery calls the source-AMI and vpc/subnet/sg filters make;
+    **`iam:PassRole` restricted to `cloud-secops-lab-packer-build-ssm-role`**; SSM session
+    use for the tunnel via the `AWS-StartPortForwardingSession` and `AWS-StartSSHSession`
+    documents. **Not** `AdministratorAccess` or `ec2:*`.
   - The workstation running Packer needs Terraform, Packer, AWS CLI v2 and the **AWS
     Session Manager plugin** on PATH — verified present on the operator workstation
     (2026-09-06).
-  - Implemented in code and **statically validated** — `terraform fmt/init/validate` and
-    `packer fmt/init/validate` all pass locally; `terraform/packer-build/.terraform.lock.hcl`
-    is present and intended for source control with the PB-1 commit. **Not yet applied or
-    built** — no `terraform apply`, no `packer build`.
+  - `terraform/packer-build/.terraform.lock.hcl` is committed. The build network is
+    **applied** in AWS and a successful `packer build` used it end-to-end (VPC/subnet/SG
+    selected by tag, ephemeral builder launched, reached over Session Manager, AMI produced,
+    builder + key pair cleaned up).
   - Evidence: [terraform/packer-build/](../terraform/packer-build/),
     [packer/wazuh-ami.pkr.hcl](../packer/wazuh-ami.pkr.hcl).
 
@@ -297,9 +297,11 @@
 ## D-013 — Least-privilege IAM identity for running Packer (PB-4)
 
 - **Status:** Accepted
-- **Resolves:** the security portion of pre-build item **PB-4** in
-  [CURRENT_STATE.md](CURRENT_STATE.md) (the design is settled; AWS apply and a real build
-  are still pending).
+- **Resolves:** pre-build item **PB-4** (least-privilege Packer execution IAM) —
+  **COMPLETE**: implemented, `terraform apply`-d, and validated by a successful `packer build`
+  that ran entirely through the assumed execution role (the first build exposed exactly one
+  missing entry — `ssm:StartSession` on `AWS-StartPortForwardingSession` — which was added
+  narrowly).
 - **Context:** Human access to the CloudGuard AWS account is via **IAM Identity Center**
   (instance in `us-east-2`). The normal CLI identity is the **`CloudGuardOperator`**
   permission set, which resolves to an `AWSReservedSSO_CloudGuardOperator_<suffix>` role
@@ -352,10 +354,14 @@
   bootstrap infrastructure and may be run deliberately with the `AdministratorAccess`
   permission set. After that, normal Packer execution uses the dedicated role. This task
   does **not** create a general Terraform-execution role.
-- **Consequences:** Implemented in code and statically reviewed; **the role does not exist
-  in AWS**, the policy is **not operationally validated**, no `packer build` has run, and
-  no AMI is Validated. First `packer build` is the real test of the derived permission set
-  (see PB-4 for the permissions flagged as "verify at first build").
+- **Consequences:** Implemented / **AWS-applied** / **validated by a successful build**.
+  The first build reached the SSM tunnel and showed Packer's `session_manager` interface
+  opens the tunnel with **`AWS-StartPortForwardingSession`** (not `AWS-StartSSHSession`);
+  `ssm:StartSession` now allows that document (both are kept, scoped to the builder instance
+  + the two named documents). A subsequent build ran end-to-end through the assumed role and
+  produced a validated AMI. If the Packer config later changes (new source options, new
+  interface), re-derive: add only the specific denied action per real `AccessDenied` — never
+  widen to `ssm:*` / `ec2:*` / all documents.
 - **Evidence:**
   [terraform/packer-build/packer-execution-role.tf](../terraform/packer-build/packer-execution-role.tf),
   [terraform/packer-build/variables.tf](../terraform/packer-build/variables.tf),

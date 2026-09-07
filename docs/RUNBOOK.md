@@ -3,12 +3,14 @@
 > Operational skeleton for the temporary-lab lifecycle:
 > `deploy → test → validate → document → destroy`.
 >
-> **Reality check (2026-09-07):** B1 (bake script), PB-1 / D-012 (build network) and
-> PB-4 / D-013 (Packer execution role + `assume_role`) are all implemented in code. PB-1
-> passed local `fmt`/`init`/`validate` (2026-09-06); the PB-4 additions have **not** been
-> re-validated (no `terraform`/`packer` where they were written). **Nothing has been applied
-> or built against AWS** — no role or network exists, no AMI. Steps that cannot yet succeed
-> are marked **⛔**. Update commands to real, tested ones as Phase 1 progresses.
+> **Reality check (2026-09-07):** the Packer prerequisite phase is **complete**. The build
+> network (PB-1) and the Packer execution role (PB-4) are `terraform apply`-d in AWS; a
+> `packer build` has run end-to-end over Session Manager and produced a base AMI that was
+> **smoke-tested and validated** (evidence: `ami-0b1bf8942dfc0daf1`, `us-east-2` — historical
+> validation evidence, not a config constant). Section 1 (build the AMI) and section 2
+> (validate the AMI) are **operational**. Sections 3–10 (the **runtime** Wazuh deployment)
+> are still not runnable — B2/B3 and the artifact-bootstrap ordering decision remain open,
+> and the runtime VPC (`10.0.0.0/16`) is **not applied**. Those steps stay marked **⛔**.
 
 All commands assume repo root `cloud-secops-lab/` and AWS credentials for the target account
 already configured (`aws sts get-caller-identity` succeeds).
@@ -34,7 +36,7 @@ already configured (`aws sts get-caller-identity` succeeds).
 | Terraform `>= 1.7.0` | `terraform version` | **verified — `v1.16.1`** |
 | Packer `>= 1.9` (Amazon plugin `github.com/hashicorp/amazon v1.8.2`) | `packer version` | **verified — installed; `packer init`/`validate` pass** |
 | Active IAM Identity Center session for `CloudGuardOperator` in the CloudGuard account | `aws sts get-caller-identity` — expect an `AWSReservedSSO_CloudGuardOperator_*` role | operator-supplied at build time (`AWS_PROFILE=cloudguard`) |
-| Packer execution-role ARN (PB-4 / [DECISIONS.md](DECISIONS.md) D-013) | `terraform -chdir=terraform/packer-build output -raw packer_execution_role_arn` (required Packer var, no default) | **in code, not applied** — created by step 1a; Packer assumes it via `assume_role` |
+| Packer execution-role ARN (PB-4 / [DECISIONS.md](DECISIONS.md) D-013) | `terraform -chdir=terraform/packer-build output -raw packer_execution_role_arn` (required Packer var, no default) | **applied** — created by step 1a; Packer assumes it via `assume_role` |
 | Docker (only if publishing Wazuh images locally — blocker B2) | `docker version` | not required for the AMI build |
 
 Region is `us-east-2` (`var.aws_region`). Single AWS account ([DECISIONS.md](DECISIONS.md)
@@ -52,7 +54,7 @@ source**.
 
 ---
 
-## 1. Build the Wazuh base AMI (Packer)  — ⛔ Not yet run (needs approval)
+## 1. Build the Wazuh base AMI (Packer)  — ✅ Operational (proven 2026-09-07)
 
 ### 1a. Provision the persistent Packer build infrastructure (one-time; bootstrap)
 
@@ -63,15 +65,14 @@ source**.
 terraform -chdir=terraform/packer-build fmt -check
 terraform -chdir=terraform/packer-build init       # selects hashicorp/aws 6.57.1 (committed lock file)
 terraform -chdir=terraform/packer-build validate
-terraform -chdir=terraform/packer-build apply       # NOT yet run
+terraform -chdir=terraform/packer-build apply       # bootstrap only — already applied; re-run only if this root's config changes
 terraform -chdir=terraform/packer-build output
 ```
 
-- PB-1 config `fmt`/`init`/`validate` passed on the operator workstation (2026-09-06). The
-  **PB-4 execution-role additions** (`packer-execution-role.tf` with
-  `data.aws_caller_identity`, the two identity variables) have **not** been re-run through
-  `fmt`/`validate` — do that before `apply`. The account ID is discovered at apply time; no
-  account ID is in source.
+- This root is **applied**. Re-run `apply` only when its own config changes, and only with
+  the `AdministratorAccess` permission set. The account ID is discovered at apply time; no
+  account ID is in source. Routine `packer build`s (step 1b) do **not** touch this root and
+  run as `CloudGuardOperator`.
 - The execution role has **no** permission over its own IAM role or the build
   VPC/subnet/IGW/SG/route table (bootstrap boundary, D-013) — which is why the first `apply`
   uses `AdministratorAccess`, not the execution role.
@@ -85,23 +86,28 @@ terraform -chdir=terraform/packer-build output
 
 ### 1b. Build the AMI
 
+Proven sequence (2026-09-07). Base credentials are a normal `CloudGuardOperator` SSO
+session; Packer then `assume_role`s the execution role for all AWS work.
+
 ```bash
+aws sso login --profile cloudguard        # normal CloudGuardOperator session — no admin
 cd packer
+
 # packer_execution_role_arn is REQUIRED (no default). Take it from step 1a's output:
 export PKR_VAR_packer_execution_role_arn="$(terraform -chdir=../terraform/packer-build output -raw packer_execution_role_arn)"
 
 packer fmt -check .
-packer init .        # installs github.com/hashicorp/amazon v1.8.2 (done 2026-09-06)
+packer init .        # installs github.com/hashicorp/amazon v1.8.2
 packer validate .    # fails if PKR_VAR_packer_execution_role_arn is unset
-# Base creds = normal CloudGuardOperator session; Packer then assumes the execution role.
-AWS_PROFILE=cloudguard packer build .    # NOT yet run — creates the ephemeral builder + AMI
+AWS_PROFILE=cloudguard packer build .
 # resulting AMI name: cloud-secops-wazuh-<timestamp>
 ```
 
-PB-1 `fmt`/`init`/`validate` passed on the operator workstation (2026-09-06). The **PB-4
-`assume_role` + required `packer_execution_role_arn` var** (`packer/wazuh-ami.pkr.hcl`,
-`packer/build-identity.pkr.hcl`) have **not** been re-run through `fmt`/`validate` — do that
-first. `packer build` has **not** run.
+This ran end-to-end on 2026-09-07: assume-role → build-VPC/subnet/SG discovery → temp key
+pair + builder launch → Session Manager port-forward tunnel → `install-wazuh-base.sh` →
+AMI register → source instance terminated → temp key pair deleted. Evidence AMI:
+`ami-0b1bf8942dfc0daf1` (`us-east-2`) — historical validation evidence, not a config
+constant.
 
 `packer_execution_role_arn` has **no default** and **no AWS account ID is committed** to the
 Packer config — the operator always supplies it from the Terraform output above. No keys or
@@ -120,7 +126,8 @@ filters** —
 `cloud-secops-lab-packer-build-ssm-profile` instance profile, **explicitly** associates a
 public IPv4 (egress only — the subnet does not auto-assign), reaches the builder through
 **SSM Session Manager** (`ssh_interface = "session_manager"`; no inbound SSH; the SG has no
-ingress), and requires **IMDSv2**.
+ingress) — the tunnel is opened with the **`AWS-StartPortForwardingSession`** document
+(confirmed by the validated build) — and requires **IMDSv2**.
 
 **Bake-script status** ([packer/scripts/install-wazuh-base.sh](../packer/scripts/install-wazuh-base.sh)):
 a true bake-time provisioner (B1 fixed) — base packages, Docker Engine + Compose plugin,
@@ -128,39 +135,44 @@ AWS CLI v2, persisted `vm.max_map_count=262144`, Docker enabled at boot, `ubuntu
 `docker` group, SSM agent enable, verification block. **No** Wazuh application state
 ([DECISIONS.md](DECISIONS.md) D-011).
 
-**A build has never been run.** It creates AWS resources and requires explicit approval.
-Confirm first:
+**Packer prerequisite status — all COMPLETE (2026-09-07):**
 
-- **PB-1 / D-012 (resolved; `fmt`/`init`/`validate` pass locally).** Run step 1a `apply`
-  first so the tag filters resolve.
-- **PB-4 / D-013 (in code; pending apply + real build).** The least-privilege Packer
-  **execution role** and its policy are now defined
-  ([terraform/packer-build/packer-execution-role.tf](../terraform/packer-build/packer-execution-role.tf)),
-  trusted only by the `CloudGuardOperator` SSO role (resilient `ArnLike aws:PrincipalArn`
-  pattern — generated suffix never hard-coded; **AWS account ID discovered via
-  `data.aws_caller_identity`, not in source**), and Packer assumes it via `assume_role`
-  using the **required** `packer_execution_role_arn` var from `terraform output`.
-  The role **does not exist in AWS yet** and the policy is **not validated**. Full action
-  list + "verify at first build" items in [CURRENT_STATE.md](CURRENT_STATE.md) PB-4. Local
-  toolchain is done (Terraform `v1.16.1`, AWS CLI `2.36.37`, SSM plugin `1.2.835.0`, Packer).
-- **PB-2 — line endings (resolved in code).** `.gitattributes` forces `*.sh` / `*.tftpl` to
-  LF; still naturally exercised by the first build.
-- **PB-3 — SSM agent (confirm at first build).** The bake script enables the agent supplied
-  by the Canonical base image (`snap start --enable amazon-ssm-agent`, deb-unit fallback)
-  and hard-fails if none is present (D-001). Confirm the snap is present on the first build.
+- **PB-1 / D-012 — COMPLETE.** Build network implemented, locally validated, `apply`-d, and
+  exercised by a successful `packer build`. Tag filters resolve to exactly one resource each.
+- **PB-2 — COMPLETE.** `.gitattributes` forces `*.sh` / `*.tftpl` / `*.tf` / `*.hcl` to LF;
+  exercised by the build.
+- **PB-3 — COMPLETE.** The base build confirmed `amazon-ssm-agent` present, enabled and
+  active on Canonical Ubuntu 24.04 (the bake script enables it via
+  `snap start --enable amazon-ssm-agent`, deb-unit fallback, hard-fail if absent — D-001).
+- **PB-4 / D-013 — COMPLETE.** The least-privilege execution role
+  ([terraform/packer-build/packer-execution-role.tf](../terraform/packer-build/packer-execution-role.tf))
+  is applied; Packer assumes it via `assume_role` (required `packer_execution_role_arn` var
+  from `terraform output`). The first build exposed exactly one missing entry —
+  `ssm:StartSession` on `AWS-StartPortForwardingSession` — added narrowly; the subsequent
+  build succeeded end-to-end. If the `amazon-ebs` config ever changes, re-derive the policy
+  and add only the specific denied action/document one at a time — never `ec2:*` / `ssm:*` /
+  all documents. Full action list in [CURRENT_STATE.md](CURRENT_STATE.md) PB-4.
 
 ---
 
-## 2. Validate the AMI  — ⛔ Not yet operational (depends on step 1)
+## 2. Validate the AMI  — ✅ Done (2026-09-07)
 
-Intended checks once step 1 is fixed:
+The base AMI was smoke-tested via a manual EC2 instance reached over Session Manager and
+**validated**:
 
-- New AMI visible: `aws ec2 describe-images --owners self --filters 'Name=name,Values=cloud-secops-wazuh-*' --region us-east-2`
-- Launch a throwaway instance from it and confirm: `docker --version`, `docker compose version`,
-  `sysctl vm.max_map_count` → `262144`, EC2 user in the `docker` group.
-- Terminate the throwaway instance.
+- AMI visible: `aws ec2 describe-images --owners self --filters 'Name=name,Values=cloud-secops-wazuh-*' --region us-east-2`
+- On a throwaway instance, confirmed: `docker --version`, `docker compose version`,
+  `aws --version` (`aws-cli/2.*`); `sysctl -n vm.max_map_count` → `262144`;
+  `systemctl is-enabled docker` → `enabled`; `systemctl is-active docker` → `active`;
+  `snap services amazon-ssm-agent` enabled + active; `ubuntu` in the `docker` group;
+  `/var/log/cloudguard-ami-build.txt` present with the expected build marker.
+- Throwaway instance terminated.
 
-Record the AMI id for step 5.
+Bake output recorded: Docker 29.8.0, Docker Compose v5.5.1, AWS CLI v2.36.40,
+`vm.max_map_count=262144`. Evidence AMI: `ami-0b1bf8942dfc0daf1` (`us-east-2`) — historical
+validation evidence only, **not** a config constant. `var.wazuh_ami_id` in the runtime root
+still has no default; supply a freshly built, validated AMI id at runtime-deploy time
+(step 5).
 
 ---
 
@@ -363,5 +375,5 @@ it is never removed by the runtime lifecycle.
 | Region | `us-east-2` |
 | VPC CIDR | `10.0.0.0/16` · subnet `10.0.1.0/24` |
 | Artifact bucket | `cloud-secops-lab-artifacts-<account_id>` |
-| Hard blockers | [CURRENT_STATE.md](CURRENT_STATE.md) — B1 fixed in code (build pending), B2–B3 open |
+| Hard blockers | [CURRENT_STATE.md](CURRENT_STATE.md) — B1 done (validated AMI); B2–B3 open |
 | Pre-build items / completion gaps / open decisions | [CURRENT_STATE.md](CURRENT_STATE.md) |

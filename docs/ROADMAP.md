@@ -13,12 +13,14 @@
 > "Code exists but has never been deployed" is **Implemented** or **Partial**, never
 > **Validated**. Phase exit criteria require **Validated**.
 
-Current position: **Phase 1 — Private Wazuh Platform — in progress (nothing Validated yet).**
+Current position: **Phase 1 — Private Wazuh Platform — in progress. The Packer prerequisite
+phase (B1, PB-1…PB-4) is COMPLETE and a validated base AMI exists. The runtime Wazuh
+deployment (VPC `10.0.0.0/16`, B2, B3, end-to-end SSM validation) is the remaining work.**
 
 | Phase | Title | Status |
 | --- | --- | --- |
-| 0 | Repository / Project Foundation | Complete on this branch (pending merge) |
-| 1 | Private Wazuh Platform | In progress — foundation + base-AMI provisioning + persistent Packer build network all Implemented in code; nothing applied or Validated |
+| 0 | Repository / Project Foundation | Complete (merged) |
+| 1 | Private Wazuh Platform | In progress — Packer prerequisite phase + validated base AMI **complete**; runtime Wazuh deployment (B2/B3/apply/validate) remaining |
 | 2 | AWS Security Sources | Planned |
 | 3 | AWS Findings → Wazuh Integration | Planned |
 | 4 | Selective Automated Response | Planned |
@@ -32,22 +34,21 @@ Current position: **Phase 1 — Private Wazuh Platform — in progress (nothing 
 Goal: the repository is self-describing — a new contributor can orient and resume work from
 version control alone.
 
-**Core deliverable — complete on branch `docs/project-continuity-baseline`, pending review/merge:**
+**Core deliverable — merged to `main`:**
 
 | Item | Status |
 | --- | --- |
-| `README.md` as a real entry point | Implemented |
-| `AGENTS.md` (contributor guide: reading order, source-of-truth, continuity rules) | Implemented |
-| `CLAUDE.md` (tool-specific instruction file, defers to `AGENTS.md`) | Implemented |
-| `docs/PROJECT_CHARTER.md` | Implemented |
-| `docs/ARCHITECTURE.md` (current vs target, diagrams) | Implemented |
-| `docs/CURRENT_STATE.md` (handoff) | Implemented — must be kept updated every substantial task |
-| `docs/ROADMAP.md` | Implemented (this file) |
-| `docs/DECISIONS.md` | Implemented |
-| `docs/RUNBOOK.md` | Implemented (many steps *Not yet operational*) |
+| `README.md` as a real entry point | Complete |
+| `AGENTS.md` (contributor guide: reading order, source-of-truth, continuity rules) | Complete |
+| `CLAUDE.md` (tool-specific instruction file, defers to `AGENTS.md`) | Complete |
+| `docs/PROJECT_CHARTER.md` | Complete |
+| `docs/ARCHITECTURE.md` (current vs target, diagrams) | Complete |
+| `docs/CURRENT_STATE.md` (handoff) | Complete — must be kept updated every substantial task |
+| `docs/ROADMAP.md` | Complete (this file) |
+| `docs/DECISIONS.md` | Complete |
+| `docs/RUNBOOK.md` | Complete (runtime steps still *Not yet operational* — that is Phase 1 work, not a Phase 0 gap) |
 
-Phase 0 is considered **done** once this branch is merged. Remaining engineering-hygiene
-items below are **backlog**, not Phase 0 blockers — see [Backlog](#backlog).
+Engineering-hygiene items below are **backlog**, not Phase 0 blockers — see [Backlog](#backlog).
 
 ---
 
@@ -68,40 +69,47 @@ Nothing in Phase 2+ starts until this is done. Canonical blocker/gap detail:
 | EC2 IAM role / instance profile / SSM core / scoped ECR pull / scoped S3 read | Implemented | [roles.tf](../terraform/wazuh-project/roles.tf) |
 | Private ECR repository **definitions** (3, immutable, scan-on-push) | Implemented | [ecr.tf](../terraform/wazuh-project/ecr.tf) |
 | S3 artifact bucket **definition** (private, SSE-S3) | Implemented | [storage.tf](../terraform/wazuh-project/storage.tf) |
-| Packer AMI **definition** (Ubuntu 24.04 source, timestamped name) | Implemented | [wazuh-ami.pkr.hcl](../packer/wazuh-ami.pkr.hcl) |
+| Packer base-AMI **definition** (Ubuntu 24.04 source, timestamped name) | Implemented | [wazuh-ami.pkr.hcl](../packer/wazuh-ami.pkr.hcl) |
 | EC2 instance **definition** + templated user-data | Implemented | [ec2.tf](../terraform/wazuh-project/ec2.tf), [install-wazuh.sh.tftpl](../terraform/wazuh-project/scripts/install-wazuh.sh.tftpl) |
 
-### Wazuh platform (Partial / Planned — nothing Validated)
+### Packer prerequisite phase — COMPLETE
+
+| Item | Status | Evidence |
+| --- | --- | --- |
+| Correct base-AMI provisioning (Docker Engine, Compose plugin, AWS CLI v2, `vm.max_map_count`, SSM verify) | **Complete** | **B1** ([DECISIONS.md](DECISIONS.md) D-011) — proven by the successful build + smoke test (2026-09-07) |
+| Persistent secure Packer build network (`terraform/packer-build/`: VPC/subnet/IGW/route/SG/SSM instance profile; fail-closed tag selectors; SSM interface; IMDSv2) | **Complete (Validated)** | **PB-1 / [DECISIONS.md](DECISIONS.md) D-012** — implemented, locally validated, `terraform apply`-d, exercised by a successful build |
+| Line-ending handling (`.gitattributes` for `*.sh` / `*.tftpl` / `*.tf` / `*.hcl`) | **Complete** | **PB-2** — committed `bcb9013`; no CRLF issues in the build |
+| SSM-agent assumption (Canonical Ubuntu 24.04 ships `amazon-ssm-agent`) | **Complete (Validated)** | **PB-3** — the successful build confirmed the agent is present, enabled, and active in the bake and in the AMI smoke test |
+| Least-privilege Packer execution IAM (`cloud-secops-lab-packer-execution-role` + inline policy; `CloudGuardOperator` SSO trust; `assume_role`) | **Complete (Validated)** | **PB-4 / [DECISIONS.md](DECISIONS.md) D-013** — applied; first build exposed one missing entry (`ssm:StartSession` on `AWS-StartPortForwardingSession`), corrected narrowly; a subsequent build ran end-to-end through the role |
+| Validated base AMI produced by the Packer workflow | **Complete (Validated)** | built + independently smoke-tested via Session Manager (Docker 29.8.0, Compose v5.5.1, AWS CLI v2.36.40, `vm.max_map_count = 262144`, Docker enabled, `ubuntu` in `docker` group, ssm-agent enabled/active, `/var/log/cloudguard-ami-build.txt` present). Evidence AMI `ami-0b1bf8942dfc0daf1` (`us-east-2`) — historical evidence, not a config constant |
+
+### Runtime Wazuh deployment — REMAINING (Planned)
 
 | Item | Status | Blocker / note |
 | --- | --- | --- |
-| Correct base-AMI provisioning (Docker Engine, Compose plugin, AWS CLI v2, `vm.max_map_count`, SSM verify) | Implemented | **B1** — committed `bcb9013`; statically validated; boundary = [DECISIONS.md](DECISIONS.md) D-011 |
-| Persistent Packer build network (`terraform/packer-build/`: VPC/subnet/IGW/route/SG/SSM instance profile) + Packer wiring (deterministic fail-closed `Project`+`Purpose`+`Name` filters, SSM interface, IMDSv2, explicit public IP) | Implemented | **PB-1 / [DECISIONS.md](DECISIONS.md) D-012** — committed `d790992`; `fmt`/`init`/`validate` pass locally; `terraform apply` of this root not yet run |
-| Least-privilege IAM identity for running Packer (`cloud-secops-lab-packer-execution-role` + inline policy; `CloudGuardOperator` SSO trust; Packer `assume_role`) | Implemented | **PB-4 / [DECISIONS.md](DECISIONS.md) D-013** — in code (this branch), not re-validated (no local `terraform`/`packer`), **role not created in AWS**, policy not validated |
-| Validated AMI produced by the Packer workflow | Planned | Still needs: re-run `terraform`/`packer` `fmt`/`validate` → `terraform apply` of `terraform/packer-build/` (bootstrap, `AdministratorAccess`) → `packer build` (assumes the execution role) → smoke test. B1/PB-1/PB-2 resolved; PB-3 confirm-at-build; **PB-4 in code, pending apply + first build (the real permission test)**. |
 | Checked-in Wazuh stack artifacts (Compose + cert-gen + manager/indexer/dashboard config, deliberately pinned version) | Planned | **B3** |
 | S3 artifact publishing workflow | Planned | **B3**; depends on the bootstrap-lifecycle decision (Open decision #1/#2) |
 | ECR image mirror/publish workflow | Planned | **B2**; depends on the pinned version (Open decision #5) |
 | EC2 hardening: dedicated security group | Planned | Phase 1 completion gap |
 | EC2 hardening: explicit root volume sizing | Planned | Phase 1 completion gap (~50 GB is a reference, not a requirement) |
 | EC2 hardening: IMDSv2 enforcement (`http_tokens = "required"`) | Planned | Phase 1 completion gap |
-| Useful Terraform outputs (instance id, bucket, SSM command) | Planned | [outputs.tf](../terraform/wazuh-project/outputs.tf) empty |
+| Useful Terraform outputs (runtime instance id, bucket, SSM command) | Planned | [outputs.tf](../terraform/wazuh-project/outputs.tf) empty |
 | Bootstrap lifecycle defined (prereqs → publish artifacts/images → host) | Planned | Open decision #1/#2 in [CURRENT_STATE.md](CURRENT_STATE.md) |
-| SSM administrative access working (Session Manager) | Planned | depends on a deployed instance |
-| Working Wazuh dashboard via SSM port forwarding | Planned | depends on B1–B3 |
-| Full deploy → validate → destroy run, recorded | Planned | **Validated** gate for the whole phase |
+| Runtime `terraform apply` of `terraform/wazuh-project/` (`10.0.0.0/16` VPC + EC2 from the base AMI) | Planned | not applied — depends on B2/B3 + the bootstrap decision |
+| Working Wazuh dashboard via SSM port forwarding | Planned | depends on the runtime deploy + B2/B3 |
+| Full deploy → validate → destroy run of the runtime, recorded | Planned | **Phase-exit** gate |
 
 ### Phase 1 exit criteria
 
-A **recorded** run of: `terraform apply` of `terraform/packer-build/` (persistent, one-time,
-bootstrap via `AdministratorAccess` — creates the build network **and** the Packer execution
-role) → `AWS_PROFILE=cloudguard packer build` (assumes the execution role; smoke-tested AMI)
-→ `terraform apply` of `terraform/wazuh-project/` → SSM
-shell into the instance → SSM port-forward to a healthy dashboard (manager + indexer +
-dashboard up) → `terraform destroy` of the runtime only → verified cleanup — with
-[RUNBOOK.md](RUNBOOK.md) updated to the real commands used, the bootstrap-lifecycle and
-persistence decisions recorded in [DECISIONS.md](DECISIONS.md), and
-[CURRENT_STATE.md](CURRENT_STATE.md) updated.
+**Done:** `terraform apply` of `terraform/packer-build/` (persistent) → `packer build`
+(assumes the execution role) → base AMI built and smoke-tested.
+
+**Remaining:** decide the bootstrap lifecycle + Wazuh version → B3 (artifact set + S3
+publish) → B2 (ECR image mirror) → EC2 hardening + runtime outputs → `terraform apply` of
+`terraform/wazuh-project/` with the validated AMI → SSM shell into the instance → SSM
+port-forward to a healthy dashboard (manager + indexer + dashboard up) → `terraform destroy`
+of the runtime only → verified cleanup — with [RUNBOOK.md](RUNBOOK.md), [DECISIONS.md](DECISIONS.md),
+and [CURRENT_STATE.md](CURRENT_STATE.md) updated to the real commands and decisions.
 
 ---
 

@@ -157,18 +157,25 @@ resource "aws_iam_role_policy" "packer_execution" {
         Resource = "*"
       },
       {
-        Sid    = "StartSshOverSsmSession"
+        Sid    = "StartSsmSessionForBuilder"
         Effect = "Allow"
 
         Action = "ssm:StartSession"
 
+        # The temporary builder instance, plus the two AWS-owned session
+        # documents Packer's session_manager SSH interface uses:
+        #   - AWS-StartPortForwardingSession: the tunnel Packer actually opens
+        #     (confirmed by the first real build, 2026-09-07)
+        #   - AWS-StartSSHSession: kept — the plugin/AWS docs also reference it
+        #     for SSH-over-SSM and its need was not disproven.
         Resource = [
           "arn:aws:ec2:${var.aws_region}:${local.account_id}:instance/*",
+          "arn:aws:ssm:${var.aws_region}::document/AWS-StartPortForwardingSession",
           "arn:aws:ssm:${var.aws_region}::document/AWS-StartSSHSession"
         ]
 
         # Force IAM to verify the caller is explicitly allowed the session
-        # document (defence in depth alongside the document ARN above).
+        # document (defence in depth alongside the document ARNs above).
         Condition = {
           BoolIfExists = {
             "ssm:SessionDocumentAccessCheck" = "true"

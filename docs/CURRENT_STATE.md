@@ -14,85 +14,81 @@
 | Field | Value |
 | --- | --- |
 | Last updated | 2026-09-07 |
-| Updated by | Phase 1 / PB-4 — least-privilege IAM identity for running Packer (execution role + inline policy + Packer `assume_role`); D-013. No AWS apply/build performed |
-| Active branch | `feat/phase1-packer-iam` (from `d790992`) |
+| Updated by | Phase 1 — Packer prerequisite phase finalization: recorded the successful build + AMI smoke test, marked PB-1…PB-4 COMPLETE, merged the branch |
+| Active branch | `feat/phase1-packer-iam` → merged to `main` |
 | Default branch | `main` |
-| Baseline | `d790992` — *feat: add secure Packer build infrastructure* (PB-1 / D-012, committed) |
-| Prior milestones | `bcb9013` *implement Wazuh base AMI provisioning* (B1) · `333460c` *Add Wazuh AWS infrastructure foundation* |
-| Most recent infrastructure work | Phase 1 / PB-4: `terraform/packer-build/packer-execution-role.tf` (Packer execution role + least-privilege inline policy), new operator-identity variables, `packer/build-identity.pkr.hcl` + `assume_role` in `packer/wazuh-ami.pkr.hcl`. **In code only — role does not exist in AWS, policy not validated, no build run.** PB-1 build network (committed `d790992`) still **not applied**. |
-| Current phase | **Phase 1 — Private Wazuh Foundation** |
-| Phase status | **IN PROGRESS** — B1 + PB-1 + PB-4 implemented in code; no `terraform apply` / `packer build` has run |
-| Validation status | Local static validation passes (see *Local validation*). No `terraform apply`, `packer build`, AMI build, or end-to-end deployment has occurred — the build network, the **Packer execution role**, and the AMI are **not deployed / not operationally Validated**. |
+| Recent milestones | *(this)* finalize Packer prerequisite validation · `19ce7a8` least-privilege Packer execution role (PB-4/D-013) · `d790992` secure Packer build infrastructure (PB-1/D-012) · `bcb9013` base-AMI provisioning (B1) |
+| Current phase | **Phase 1 — Private Wazuh Platform** |
+| Phase status | **IN PROGRESS** — the **Packer prerequisite phase (B1, PB-1…PB-4) is COMPLETE** and a **validated base AMI** exists. Persistent Packer build infrastructure is **applied** in AWS. The **runtime Wazuh environment is NOT applied** (B2, B3, `terraform/wazuh-project/` apply, end-to-end SSM validation remain). |
+| Validation status | **Base AMI = VALIDATED** (built + independently smoke-tested via Session Manager, 2026-09-07). Build network + execution role = **applied and build-validated**. Runtime Wazuh infrastructure = **not applied / not validated**. |
 
-### Local validation
+### Validation record
 
-**PB-1 / D-012 (operator workstation, 2026-09-06)** — verified: Terraform `v1.16.1`, AWS CLI
-`2.36.37`, Session Manager Plugin `1.2.835.0`, Packer (Amazon plugin `v1.8.2`). All passed:
-`terraform -chdir=terraform/packer-build fmt -check / init / validate` (selected
-`hashicorp/aws v6.57.1`, wrote the committed `terraform/packer-build/.terraform.lock.hcl`);
-`packer fmt -check . / init . / validate .` ("The configuration is valid.").
+**Local static checks (operator workstation)** — Terraform `v1.16.1`, AWS CLI `2.36.37`,
+Session Manager Plugin `1.2.835.0`, Packer (Amazon plugin `v1.8.2`). `terraform -chdir=terraform/packer-build fmt -check / init / validate`
+and `packer fmt -check . / init . / validate .` all pass.
 
-**PB-4 / D-013 (this pass)** — the environment used for this change has **no** `terraform`,
-`packer`, or `aws` binary, so `fmt`/`validate` could **not** be re-run against the new
-execution-role code. Static review only: HCL brace/paren balance, `jsonencode` policy
-structure, ARN construction, cross-references (`aws_iam_role.build_ssm.arn`,
-`aws_iam_instance_profile.build_ssm.arn`). The operator must run
-`terraform -chdir=terraform/packer-build fmt/validate` and `packer fmt/validate .` before
-authorizing a build.
+**Successful Packer build (2026-09-07).** Base credentials `CloudGuardOperator` →
+`sts:AssumeRole` `cloud-secops-lab-packer-execution-role` → selected the dedicated build
+VPC/subnet/SG by tag → launched a temporary builder → connected over **Session Manager port
+forwarding** (`AWS-StartPortForwardingSession`) → ran `scripts/install-wazuh-base.sh` →
+created an AMI → terminated the temporary instance → deleted the temporary key pair. The
+first build had exposed exactly one missing IAM entry (`ssm:StartSession` on
+`AWS-StartPortForwardingSession`), which was added narrowly; the next build succeeded.
 
-`terraform/packer-build/.terraform.lock.hcl` is committed (`d790992`) and is intentional
+Bake output: **Docker 29.8.0 · Docker Compose v5.5.1 · AWS CLI v2.36.40 ·
+`vm.max_map_count = 262144` · Docker enabled · `ubuntu` in `docker` group ·
+`amazon-ssm-agent` enabled + active**.
+
+**AMI smoke test (2026-09-07).** A manual EC2 instance launched from the new AMI and
+independently verified via Session Manager: `docker --version`, `docker compose version`,
+`aws --version` all work; `sysctl -n vm.max_map_count` → `262144`; `systemctl is-enabled docker`
+→ `enabled`; `systemctl is-active docker` → `active`; `snap services amazon-ssm-agent` →
+enabled/active; `ubuntu` in the `docker` group; `/var/log/cloudguard-ami-build.txt` present
+with the expected build marker. → **AMI = VALIDATED.**
+
+Evidence AMI: `ami-0b1bf8942dfc0daf1` (`us-east-2`). *Historical validation evidence only —
+not a config constant; `var.wazuh_ami_id` takes an explicit value chosen at deploy time.*
+The smoke-test instance is disposable and not part of the persistent architecture.
+
+`terraform/packer-build/.terraform.lock.hcl` is committed and is intentional
 **source-controlled dependency metadata**. `terraform/packer-build/.terraform/` and provider
 binaries stay git-ignored.
 
 ### Repository / working-tree note
 
-Committed history: `d790992` (PB-1 / D-012 — the whole `terraform/packer-build/` build
-network + Packer wiring + `.terraform.lock.hcl`), `bcb9013` (B1 bake script + `.gitattributes`).
+The Packer prerequisite phase is merged to `main`: the `terraform/packer-build/` build
+network + execution role, the fixed bake script + `.gitattributes`, and the narrow
+`ssm:StartSession` fix (`AWS-StartPortForwardingSession`) that the first build required.
 
-Uncommitted working-tree changes from the **PB-4** task (this branch):
-
-- `terraform/packer-build/packer-execution-role.tf` (new) — `data.aws_caller_identity.current`
-  (account discovered at apply time — **no account ID in source**),
-  `aws_iam_role.packer_execution` (`cloud-secops-lab-packer-execution-role`) + inline
-  least-privilege policy + `local`s for the account ID and SSO trust ARN pattern.
-- `terraform/packer-build/variables.tf` — added `identity_center_region` (`us-east-2`) and
-  `operator_permission_set_name` (`CloudGuardOperator`). No account-ID variable.
-- `terraform/packer-build/outputs.tf` — added `packer_execution_role_arn`.
-- `terraform/packer-build/iam.tf` — comment only (points to the new execution-role file).
-- `packer/build-identity.pkr.hcl` (new) — `variable "packer_execution_role_arn"`, **required,
-  no default** (operator supplies it from the Terraform output).
-- `packer/wazuh-ami.pkr.hcl` — added an `assume_role` block in the `amazon-ebs` source.
-- `docs/CURRENT_STATE.md`, `docs/RUNBOOK.md`, `docs/ROADMAP.md`, `docs/DECISIONS.md`
-  (new **D-013**), `docs/ARCHITECTURE.md` (D-013 summary row only) — documentation.
-
-**Not touched by this task** (unrelated working-tree changes, preserve exactly):
-`terraform/wazuh-project/{ec2,ecr,roles,storage}.tf` and `packer/variables.pkr.hcl` — each
-carries an in-progress CRLF→LF renormalization only. The historical ECR comment-only change
-is in `git stash` — do not restore it.
-
-Nothing has been `terraform apply`-d or `packer build`-t. Verify local state with
-`git status` / `git diff` before continuing.
+**Known unrelated working-tree changes** — CRLF→LF renormalization only, deliberately left
+alone and **not** part of the Packer finalization commit:
+`terraform/wazuh-project/{ec2,ecr,roles,storage}.tf` and `packer/variables.pkr.hcl`. The
+historical ECR comment-only change is in `git stash@{0}` — do not restore it.
 
 ---
 
 ## Last completed meaningful milestone
 
-**Commit `333460c` — private Wazuh AWS foundation scaffolded in Terraform + Packer.**
+**Packer prerequisite phase — COMPLETE, with a validated base AMI.**
 
-That commit:
-
-- Rewrote earlier rough networking/endpoints code into a consistent, tagged module.
-- Added `ec2.tf`, `ecr.tf`, `roles.tf`, `storage.tf`.
-- Added the `packer/` directory (AMI source + variables + provisioner script).
-- Split the old monolithic `install-wazuh.sh` into a Packer provisioner script and a
-  Terraform user-data template — **the split is incomplete / incorrect** (see Blocker B1).
-- Changed the Wazuh instance type from `t3.large` to `c5a.xlarge` and dropped the explicit
-  ~50 GB root-volume configuration.
-
-Since `333460c`, the repository has gained the project documentation baseline and
-professionalization work, followed by the Phase 1 / B1 base-AMI provisioning
-implementation. B1 is implemented in code but has not yet been built or operationally
-validated.
+- **B1** — the bake script (`packer/scripts/install-wazuh-base.sh`) installs stable host
+  prerequisites only; proven by the successful build + smoke test (D-011).
+- **PB-1 / D-012** — a persistent, isolated, secure Packer build network
+  (`terraform/packer-build/`): VPC `10.10.0.0/24`, one subnet (`map_public_ip_on_launch = false`),
+  IGW + default route, builder SG with **no ingress** + egress TCP 80/443 only, builder SSM
+  role/profile. **Applied** and exercised by a real build.
+- **PB-2** — `.gitattributes` forces LF for `*.sh` / `*.tftpl` / `*.tf` / `*.hcl`; no CRLF
+  issues in the build.
+- **PB-3** — Canonical Ubuntu 24.04 ships `amazon-ssm-agent`; the successful build + smoke
+  test confirmed it is present, enabled, and active.
+- **PB-4 / D-013** — least-privilege Packer **execution role**
+  (`cloud-secops-lab-packer-execution-role`), assumed from `CloudGuardOperator`, separate
+  from the builder role. **Applied.** The first build exposed one missing IAM entry
+  (`ssm:StartSession` on `AWS-StartPortForwardingSession`); corrected narrowly; a subsequent
+  build ran end-to-end through the role.
+- **Base AMI** — built and independently smoke-tested via Session Manager → **VALIDATED**
+  (see *Validation record*).
 
 ---
 
@@ -107,20 +103,22 @@ validated.
 | Provider pinning: `hashicorp/aws ~> 6.57.0`, Terraform `>= 1.7.0`, region from `var.aws_region` | [providers.tf](../terraform/wazuh-project/providers.tf) |
 | Input variables (`project_name`, `aws_region`, `availability_zone`, `vpc_cidr`, `subnet_cidr`, `wazuh_ami_id`, `wazuh_instance_type`) | [variables.tf](../terraform/wazuh-project/variables.tf) |
 
-### Persistent Packer build network — `terraform/packer-build/` (new root, D-012)
+### Persistent Packer build infrastructure — `terraform/packer-build/` (D-012 / D-013) — **APPLIED**
 
 | Component | File(s) |
 | --- | --- |
-| Build VPC `10.10.0.0/24` (non-overlapping with runtime `10.0.0.0/16`), DNS support + hostnames | [network.tf](../terraform/packer-build/network.tf) |
+| Build VPC `10.10.0.0/24` (isolated from the runtime `10.0.0.0/16` — no peering / TGW), DNS support + hostnames | [network.tf](../terraform/packer-build/network.tf) |
 | One build subnet, `map_public_ip_on_launch = false` | [network.tf](../terraform/packer-build/network.tf) |
 | Internet Gateway + `0.0.0.0/0` route + association | [network.tf](../terraform/packer-build/network.tf) |
 | Builder security group — **no ingress**; egress TCP 80 + 443 to `0.0.0.0/0` only | [network.tf](../terraform/packer-build/network.tf) |
-| Builder IAM role (`cloud-secops-lab-packer-build-ssm-role`) + `AmazonSSMManagedInstanceCore` **only** + instance profile (`cloud-secops-lab-packer-build-ssm-profile`) | [iam.tf](../terraform/packer-build/iam.tf) |
-| Outputs (vpc/subnet/sg ids, instance-profile name, role ARN, Packer selector tags) | [outputs.tf](../terraform/packer-build/outputs.tf) |
-| Provider pinning matches the runtime root (`aws ~> 6.57.0`, TF `>= 1.7.0`) | [providers.tf](../terraform/packer-build/providers.tf) |
+| Builder IAM role (`cloud-secops-lab-packer-build-ssm-role`) + `AmazonSSMManagedInstanceCore` **only** + instance profile | [iam.tf](../terraform/packer-build/iam.tf) |
+| **Packer execution role** (`cloud-secops-lab-packer-execution-role`) + least-privilege inline policy (`CloudGuardOperator` SSO trust; account ID via `data.aws_caller_identity`) | [packer-execution-role.tf](../terraform/packer-build/packer-execution-role.tf) |
+| Outputs (vpc/subnet/sg ids, instance-profile name, builder role ARN, **`packer_execution_role_arn`**, selector tags) | [outputs.tf](../terraform/packer-build/outputs.tf) |
 
-Status: **Implemented in code, not applied.** `terraform apply` of this root is now a
-prerequisite for `packer build` (was PB-1).
+Status: **applied in AWS and exercised by a successful `packer build`.** This root is
+**persistent supporting infrastructure** — it is deliberately outside the Wazuh runtime
+deploy→…→destroy cycle and carries no hourly cost (control-plane objects only). Re-apply only
+when the code changes.
 
 ---
 
@@ -130,10 +128,9 @@ prerequisite for `packer build` (was PB-1).
 | --- | --- | --- |
 | ECR repositories | 3 repos, `IMMUTABLE`, scan-on-push ([ecr.tf](../terraform/wazuh-project/ecr.tf)) | No working workflow publishes Wazuh images into the repos |
 | S3 artifact bucket | Bucket, public access block, SSE-S3 AES256 ([storage.tf](../terraform/wazuh-project/storage.tf)) | Bucket is empty; no checked-in Wazuh artifact set; no publish workflow; no versioning; no TLS-only bucket policy |
-| Wazuh EC2 instance | Resource with instance profile, private subnet, templated user-data ([ec2.tf](../terraform/wazuh-project/ec2.tf)) | No dedicated security group; no explicit `root_block_device`; no `metadata_options` (IMDSv2). Takes an explicit `var.wazuh_ami_id` (acceptable), but no validated AMI exists to supply |
-| Packer AMI build | `amazon-ebs` source, Ubuntu 24.04 filter, timestamped AMI name ([wazuh-ami.pkr.hcl](../packer/wazuh-ami.pkr.hcl)); provisioner script now implements bake-time host setup only ([install-wazuh-base.sh](../packer/scripts/install-wazuh-base.sh), B1 fixed) | Never built; no *Validated* AMI; pre-build prerequisites unmet (see B1 note below) |
-| EC2 user-data | Template does S3 sync + ECR login + `docker compose pull/up` + cert generation ([install-wazuh.sh.tftpl](../terraform/wazuh-project/scripts/install-wazuh.sh.tftpl)) | Depends on ECR images and S3 artifacts that don't exist; no health/wait/verification logic (the deleted `install-wazuh.sh` had a dashboard-wait loop) |
-| Terraform outputs | — | [outputs.tf](../terraform/wazuh-project/outputs.tf) is an empty placeholder |
+| Wazuh **runtime** EC2 instance | Resource with instance profile, private subnet, templated user-data ([ec2.tf](../terraform/wazuh-project/ec2.tf)) | Runtime not applied. No dedicated security group; no explicit `root_block_device`; no `metadata_options` (IMDSv2). `var.wazuh_ami_id` now has a **validated** base AMI to point at |
+| EC2 user-data | Template does S3 sync + ECR login + `docker compose pull/up` + cert generation ([install-wazuh.sh.tftpl](../terraform/wazuh-project/scripts/install-wazuh.sh.tftpl)) | Depends on ECR images and S3 artifacts that don't exist (B2/B3); no health/wait/verification logic |
+| Terraform outputs (runtime root) | — | [outputs.tf](../terraform/wazuh-project/outputs.tf) is an empty placeholder |
 
 ---
 
@@ -156,40 +153,38 @@ pipeline · multi-AZ / HA Wazuh. See [DECISIONS.md](DECISIONS.md).
 
 ---
 
-## Known defects / gaps
+## Status of blockers and prerequisites
 
-### Hard deployment blockers
+### Packer prerequisite phase — COMPLETE
 
-These prevent a first successful deployment.
+| ID | Item | Status |
+| --- | --- | --- |
+| ~~**B1**~~ | Correct bake-time provisioning | **DONE** — [packer/scripts/install-wazuh-base.sh](../packer/scripts/install-wazuh-base.sh) (committed `bcb9013`) installs host prerequisites only; proven by the successful build + smoke test (D-011). |
+| ~~**PB-1**~~ | Secure persistent Packer build network | **DONE** — [terraform/packer-build/](../terraform/packer-build/) (D-012). Fail-closed tag selectors, no-ingress SG, IMDSv2, isolated VPC. Applied and build-validated. |
+| ~~**PB-2**~~ | Line-ending handling | **DONE** — `.gitattributes` forces LF for `*.sh` / `*.tftpl` / `*.tf` / `*.hcl`; no CRLF issues in the build. |
+| ~~**PB-3**~~ | SSM-agent assumption | **DONE** — Canonical Ubuntu 24.04 ships `amazon-ssm-agent`; the successful build **and** the AMI smoke test confirmed it present, enabled, and active. |
+| ~~**PB-4**~~ | Least-privilege Packer execution IAM | **DONE** — `cloud-secops-lab-packer-execution-role` + inline policy ([packer-execution-role.tf](../terraform/packer-build/packer-execution-role.tf), D-013), assumed from `CloudGuardOperator`, separate from the builder role. The first build exposed one missing entry (`ssm:StartSession` on `AWS-StartPortForwardingSession`); added narrowly; a subsequent build ran end-to-end. Allowed actions and the "add only on real `AccessDenied`, never `ec2:*` / `ssm:*` / all documents" rule are recorded in D-013. |
+| ~~AMI~~ | Validated base AMI | **DONE — VALIDATED** (see *Validation record*). |
+
+### Runtime deployment — REMAINING
 
 | ID | Blocker | Detail |
 | --- | --- | --- |
-| ~~**B1**~~ | Packer bake provisioning was incorrect | **Fixed in code (committed `bcb9013`).** [packer/scripts/install-wazuh-base.sh](../packer/scripts/install-wazuh-base.sh) was byte-identical to the runtime user-data template. It has been rewritten as a true bake-time provisioner: base packages → Docker Engine + `docker-compose-plugin` + `docker-buildx-plugin` + `containerd.io` from Docker's apt repo → Docker enabled at boot → `ubuntu` in the `docker` group → persisted `vm.max_map_count=262144` → **AWS CLI v2** (official installer, fresh `./aws/install`) → SSM agent enabled via snapd (`snap start --enable amazon-ssm-agent`, deb-unit fallback, hard-fail if absent) → cleanup → verification block (`docker --version`, `docker compose version`, **AWS CLI major version 2 asserted**, `sysctl -n vm.max_map_count` = 262144, docker-group membership, `systemctl is-enabled docker`). No Terraform template syntax, no S3/ECR/`docker compose pull\|up`, no Wazuh version. Boundary recorded as [DECISIONS.md](DECISIONS.md) D-011. **Still not built** — see *Pre-build prerequisites* and *completion gaps*. |
-| **B2** | No Wazuh ECR image mirror/publish workflow | The three repos exist but there is no working process to pull the upstream Wazuh manager/indexer/dashboard images at a pinned version and push them into the private repos. Without it, `docker compose pull` on the instance fails. |
-| **B3** | No complete Wazuh artifact set / S3 publish workflow | The repo contains no `docker-compose.yml`, `generate-indexer-certs.yml`, or manager/indexer/dashboard config, and nothing publishes such a set to `s3://<bucket>/wazuh/`. The `aws s3 sync` in user-data retrieves nothing and the stack has no definition to run. |
+| **B2** | No Wazuh ECR image mirror/publish workflow | The 3 repos exist but nothing pulls the upstream Wazuh manager/indexer/dashboard images at a pinned version and pushes them to the private repos. `docker compose pull` on the runtime instance would fail. |
+| **B3** | No complete Wazuh artifact set / S3 publish workflow | No `docker-compose.yml`, `generate-indexer-certs.yml`, or manager/indexer/dashboard config in the repo, and nothing publishes such a set to `s3://<bucket>/wazuh/`. |
 
-### Pre-build prerequisites (must be confirmed/resolved before an authorized `packer build`)
+### Runtime completion / hardening gaps
 
-| # | Item | Status | Detail |
-| --- | --- | --- | --- |
-| PB-1 | Builder networking / SG design | **Resolved by design (D-012); implemented in code and locally validated; not applied** | Accepted architecture: a persistent dedicated build network (`terraform/packer-build/`) + ephemeral SSM-managed builder. Packer wired to it with **deterministic, fail-closed** selectors (`tag:Project` + `tag:Purpose` + resource-specific `tag:Name`; `subnet_filter` has no `most_free`/`random`, so an ambiguous match aborts the build), the dedicated instance profile, explicit public IPv4, `ssh_interface = "session_manager"`, IMDSv2. Builder SG has **no ingress**. `terraform fmt/init/validate` and `packer fmt/init/validate` all pass locally (see *Local validation*). Remaining: `terraform apply` of `terraform/packer-build/` must run before `packer build`, and neither has been run. |
-| PB-2 | Shell script line endings | **Resolved in code** | `.gitattributes` (committed `bcb9013`) forces `*.sh` and `*.tftpl` to LF regardless of `core.autocrlf`; `git check-attr` confirms `eol=lf` on `install-wazuh-base.sh` and `install-wazuh.sh.tftpl`. Uploaded-script behaviour is still exercised by the eventual `packer build`. |
-| PB-3 | SSM agent assumption | **Confirm at first build** | The bake script uses the SSM agent supplied by the Canonical Ubuntu base image — `snap start --enable amazon-ssm-agent` (deb systemd-unit fallback) — and **hard-fails the build** if no supported agent is present (SSM is the only admin path, D-001). No second install path was added. Confirm the snap is present on the first real build. |
-| PB-4 | Least-privilege IAM identity for running Packer | **Implemented in code / pending AWS apply and real build validation** | Local toolchain is **resolved** — Terraform `v1.16.1`, AWS CLI `2.36.37`, Session Manager Plugin `1.2.835.0`, Packer (see *Local validation*). The identity model is now in code (**[DECISIONS.md](DECISIONS.md) D-013**): `cloud-secops-lab-packer-execution-role` in [terraform/packer-build/packer-execution-role.tf](../terraform/packer-build/packer-execution-role.tf), trusted only by the `CloudGuardOperator` IAM Identity Center role (resilient `ArnLike aws:PrincipalArn` pattern — SSO suffix never hard-coded; **AWS account ID discovered via `data.aws_caller_identity`, not committed to source**); Packer assumes it via `assume_role` in [packer/wazuh-ami.pkr.hcl](../packer/wazuh-ami.pkr.hcl) using the **required, default-less** `packer_execution_role_arn` var, supplied from `terraform output`. The builder role (`…-packer-build-ssm-role`, `AmazonSSMManagedInstanceCore` only) stays separate. **The role does not exist in AWS, the policy is not operationally validated, no `packer build` has run.** Allowed actions — grouped: **discovery** `ec2:DescribeImages/DescribeInstances/DescribeInstanceStatus/DescribeRegions/DescribeVpcs/DescribeSubnets/DescribeSecurityGroups/DescribeTags/DescribeVolumes/DescribeSnapshots/DescribeKeyPairs` (`Resource="*"` — no EC2 Describe resource scoping); **builder lifecycle** `ec2:RunInstances/StopInstances/TerminateInstances/CreateKeyPair/DeleteKeyPair/CreateTags` (`Resource="*"` — RunInstances spans many request resources); **AMI** `ec2:CreateImage` (+ the `CreateTags` above); **IAM** `iam:PassRole` on `cloud-secops-lab-packer-build-ssm-role` only (`iam:PassedToService=ec2.amazonaws.com`), `iam:GetInstanceProfile` on the builder profile only; **SSM** `ssm:DescribeInstanceInformation` (`*`), `ssm:StartSession` on `instance/*` + the `AWS-StartSSHSession` document (with a `BoolIfExists ssm:SessionDocumentAccessCheck = true` condition), `ssm:TerminateSession`/`ssm:ResumeSession` on `session/*` (account+region scoped — `${aws:username}` self-scoping does not apply to assumed roles). **Verify at first build** (not granted preemptively): `ec2:CreateSnapshot`/`CreateSnapshots`, `ec2:DescribeImageAttribute`, `ec2:DescribeInstanceTypeOfferings`, `iam:GetRole`, `ssmmessages:*`, `ssm:GetConnectionStatus`, `ssm:DescribeSessions` — add a specific action only if a real build fails with `AccessDenied` on it; never widen to `ec2:*`/`ssm:*`. **Not granted:** `ec2:*`, `CreateSecurityGroup`/`DeleteSecurityGroup`/`Authorize`/`Revoke*SecurityGroupIngress`, spot/fleet, KMS, ECR/S3, Security Hub/GuardDuty, Terraform-management, IAM role create/delete, and any permission to modify the execution role's own role/VPC/subnet/IGW/SG/route table (bootstrap boundary — first apply uses `AdministratorAccess` deliberately). |
-
-### Phase 1 completion / hardening gaps
-
-Needed to *finish and validate* Phase 1. These are not what stops a first boot; they are what
-Phase 1 must still deliver to be considered done.
+These finish Phase 1 once B2/B3 and the bootstrap decision are settled.
 
 | Gap | Notes |
 | --- | --- |
-| No validated AMI from the repaired Packer workflow | `var.wazuh_ami_id` taking an explicit value is fine; the missing capability is a *trusted* AMI (built by a fixed B1 workflow, smoke-tested per [RUNBOOK.md](RUNBOOK.md) step 2) to put in it. |
-| Dedicated EC2 security group | [ec2.tf](../terraform/wazuh-project/ec2.tf) sets none — instance would use the VPC default SG. |
-| Explicit root volume sizing | No `root_block_device`; defaults to the AMI's size. Revisit the historical ~50 GB figure — it is a reference, not a requirement. |
-| IMDSv2 enforcement | No `metadata_options { http_tokens = "required" }`. |
-| Useful Terraform outputs | [outputs.tf](../terraform/wazuh-project/outputs.tf) is empty — no instance id / bucket name / ready-to-paste SSM command. |
-| Operator conveniences / SSM access runbook wired to real values | [RUNBOOK.md](RUNBOOK.md) currently has placeholder ids and unvalidated commands. |
+| Runtime `terraform apply` not run | `terraform/wazuh-project/` (VPC `10.0.0.0/16`, EC2 from the validated base AMI) has never been applied. |
+| Dedicated EC2 security group | [ec2.tf](../terraform/wazuh-project/ec2.tf) sets none. |
+| Explicit root volume sizing | No `root_block_device`. ~50 GB is a reference, not a requirement. |
+| IMDSv2 enforcement on the runtime instance | No `metadata_options { http_tokens = "required" }`. |
+| Useful runtime Terraform outputs | [outputs.tf](../terraform/wazuh-project/outputs.tf) is empty — no instance id / bucket name / SSM command. |
+| RUNBOOK runtime steps use placeholder ids | Steps 3–11 still have `ami-XXXX` / `i-XXXX` placeholders. |
 
 ### Related quality gaps (track for Phase 1 close-out, not blocking)
 
@@ -251,65 +246,37 @@ been decided**.
 
 ## Exact next logical task
 
-> **Make the private single-node Wazuh deployment successfully deployable and validate it
-> through SSM — before starting any AWS detection/ingestion phase.**
+> **The Packer prerequisite phase is done. Next is the runtime Wazuh deployment path.**
+> Do NOT start Phase 2+ (detection/ingestion/response). No further "PB" work is needed.
 
-Recommended sub-sequence (one coherent unit of Phase 1 work):
+Recommended sequence (one coherent unit of Phase 1 work):
 
-0. **Decide the bootstrap lifecycle** (see *Unresolved lifecycle issues* → Artifact bootstrap
+1. **Decide the bootstrap lifecycle** (see *Unresolved lifecycle issues* → Artifact bootstrap
    sequencing) and **pick a Wazuh version to pin** (Open decision #5). Everything below
-   depends on these.
-1. **Fix the Packer bake script (B1).** ✅ *Done in code (committed `bcb9013`).* See the
-   struck-through B1 row above and D-011.
-1a. **Implement the persistent Packer build network (PB-1 / D-012).** ✅ *Done in code
-   (committed `d790992`) and locally validated — Terraform + Packer `fmt`/`init`/`validate`
-   pass.*
-1b. **Define the least-privilege IAM identity for Packer (PB-4 / D-013).** ✅ *Done in code
-   (uncommitted on `feat/phase1-packer-iam`) — execution role + inline policy + Packer
-   `assume_role`. Re-run `terraform`/`packer` `fmt`/`validate` on a machine that has them
-   (not available where this was written).*
-2. **➡ NEXT: apply the build network, then build and smoke-test the AMI** — *requires
-   explicit approval; creates AWS resources.*
-   - Re-run `terraform -chdir=terraform/packer-build fmt/validate` and `packer fmt/validate .`;
-     review the PB-4 policy against the derived-permissions list. Re-confirm **PB-3** (SSM
-     snap on the base image). **PB-1/PB-2 resolved; PB-4 in code, pending apply + build.**
-   - `terraform -chdir=terraform/packer-build apply` (**bootstrap** — run with the
-     `AdministratorAccess` permission set; creates the build VPC/subnet/IGW/SG/instance
-     profile **and the Packer execution role** — no hourly cost).
-   - Supply the **required** Packer var from the output:
-     `export PKR_VAR_packer_execution_role_arn="$(terraform -chdir=terraform/packer-build output -raw packer_execution_role_arn)"`.
-   - `AWS_PROFILE=cloudguard packer build .` (from `packer/`; Packer assumes the execution
-     role). If a real `AccessDenied` surfaces, add **only** that specific action (see the
-     PB-4 "verify at first build" list) — never widen to `ec2:*` / `ssm:*`.
-   - Launch a throwaway instance from the resulting AMI and confirm `docker`,
-     `docker compose`, `aws` reports **major version 2**, `sysctl -n vm.max_map_count` =
-     262144, `ubuntu` in `docker` group, SSM agent active; terminate it. Only then is the
-     AMI *Validated*.
-   - The build network is **persistent** — do **not** `terraform destroy` it as part of the
-     Wazuh runtime lifecycle (D-012).
-3. **Provide the Wazuh artifact set (B3).** Add a checked-in `wazuh/` source directory
-   (Compose file, `generate-indexer-certs.yml`, manager/indexer/dashboard config) at the
-   pinned version, plus a defined publish path to `s3://<bucket>/wazuh/` consistent with the
-   bootstrap lifecycle chosen in step 0.
-4. **Publish images to ECR (B2).** Add a working mirror workflow for the Wazuh
-   manager/indexer/dashboard images at the pinned version.
-5. **Phase 1 hardening + outputs.** Dedicated security group, explicit `root_block_device`
+   depends on these; record the decisions in [DECISIONS.md](DECISIONS.md).
+2. **B3 — Wazuh artifact set + S3 publish.** Check in a `wazuh/` source directory (Compose
+   file, `generate-indexer-certs.yml`, manager/indexer/dashboard config) at the pinned
+   version, plus a defined publish path to `s3://<bucket>/wazuh/` consistent with the
+   bootstrap lifecycle from step 1.
+3. **B2 — ECR image mirror.** A working workflow to pull the Wazuh manager/indexer/dashboard
+   images at the pinned version → tag → push to the 3 private repos.
+4. **Runtime EC2 hardening + outputs.** Dedicated security group, explicit `root_block_device`
    (revisit the ~50 GB reference), `metadata_options { http_tokens = "required" }`, and
-   populate `outputs.tf` (instance id, bucket name, ready-to-paste SSM port-forward command).
-6. **Validate the lifecycle.** Packer build → set `wazuh_ami_id` →
-   `terraform init/plan/apply` → SSM into the instance → SSM port-forward to the dashboard →
-   confirm manager + indexer + dashboard healthy → `terraform destroy` → confirm cleanup
-   (respecting whatever persistence boundary step 0 defined for ECR/S3).
-7. **Update this document, [ROADMAP.md](ROADMAP.md), and [RUNBOOK.md](RUNBOOK.md)** with real,
-   validated commands and results, and record the step-0 decisions in
-   [DECISIONS.md](DECISIONS.md).
+   populate the runtime `outputs.tf` (instance id, bucket name, ready-to-paste SSM
+   port-forward command).
+5. **Deploy + validate the runtime.** `terraform apply` `terraform/wazuh-project/` with
+   `wazuh_ami_id` = the validated base AMI → SSM shell into the instance → SSM port-forward
+   to the dashboard → confirm manager + indexer + dashboard healthy → `terraform destroy`
+   of the **runtime only** → verified cleanup (leave `terraform/packer-build/` up — D-012).
+6. **Update [ROADMAP.md](ROADMAP.md), [RUNBOOK.md](RUNBOOK.md), and this file** with the real
+   commands, results, and the step-1 decisions.
 
 ### Prerequisites that already exist
 
-VPC + subnet + route table; all five interface endpoints + S3 gateway endpoint; IAM role with
-SSM + scoped ECR pull + scoped S3 read; ECR repos; artifact bucket; the EC2 resource and the
-user-data template; the Packer `source` block. The remaining work is filling gaps, not new
-architecture.
+Validated base AMI · applied + validated Packer build infrastructure (build network +
+execution role) · runtime VPC/subnet/route-table/endpoints/IAM/ECR-defs/S3-def/EC2-def all
+in code. The remaining work is B2/B3 + the bootstrap decision + hardening + the runtime
+apply — **filling gaps, not new architecture**.
 
 ### Do NOT work on yet
 
@@ -329,8 +296,8 @@ architecture.
 | Path | Role |
 | --- | --- |
 | [terraform/wazuh-project/](../terraform/wazuh-project/) | Terraform root — **disposable Wazuh runtime** |
-| [terraform/packer-build/](../terraform/packer-build/) | Terraform root — **persistent Packer build network** (D-012); apply before `packer build`, do not destroy with the runtime |
-| [terraform/packer-build/packer-execution-role.tf](../terraform/packer-build/packer-execution-role.tf) | **Packer execution role** + least-privilege policy (PB-4 / D-013) |
+| [terraform/packer-build/](../terraform/packer-build/) | Terraform root — **persistent Packer build infrastructure** (D-012), **applied**; do not destroy with the runtime |
+| [terraform/packer-build/packer-execution-role.tf](../terraform/packer-build/packer-execution-role.tf) | **Packer execution role** + least-privilege policy (PB-4 / D-013), applied + build-validated |
 | [packer/build-identity.pkr.hcl](../packer/build-identity.pkr.hcl) | `packer_execution_role_arn` var; `assume_role` is in `wazuh-ami.pkr.hcl` |
 | [terraform/wazuh-project/ec2.tf](../terraform/wazuh-project/ec2.tf) | Wazuh instance (hardening gaps here) |
 | [terraform/wazuh-project/endpoints.tf](../terraform/wazuh-project/endpoints.tf) | VPC endpoints + endpoint SG |
@@ -340,7 +307,7 @@ architecture.
 | [terraform/wazuh-project/outputs.tf](../terraform/wazuh-project/outputs.tf) | Empty — needs outputs |
 | [terraform/wazuh-project/scripts/install-wazuh.sh.tftpl](../terraform/wazuh-project/scripts/install-wazuh.sh.tftpl) | EC2 user-data (runtime) |
 | [packer/wazuh-ami.pkr.hcl](../packer/wazuh-ami.pkr.hcl) | AMI build definition (build-network filters + `assume_role` for the execution role) |
-| [packer/scripts/install-wazuh-base.sh](../packer/scripts/install-wazuh-base.sh) | Bake-time host provisioner — **B1 fixed**, not yet built |
+| [packer/scripts/install-wazuh-base.sh](../packer/scripts/install-wazuh-base.sh) | Bake-time host provisioner — **B1 done**, proven by the validated build |
 
 The pre-`333460c` combined bootstrap (`git show cca2387:terraform/wazuh-project/scripts/install-wazuh.sh`)
 is kept only as historical reference for the Docker/kernel steps; it also contains runtime
@@ -352,37 +319,29 @@ logic and an old Wazuh version and must not be copied wholesale.
 
 - The repository is the project record. Everything needed to resume work is in version
   control; do not rely on any context from outside it.
-- No successful end-to-end deployment or validation is documented in the repository. Treat
-  all infrastructure as unvalidated until Phase 1 validation is performed.
+- **Layering (keep this distinction):** build infrastructure (`terraform/packer-build/`) =
+  **persistent** and applied; the temporary Packer builder = **ephemeral** (Packer creates
+  and destroys it per build); the base AMI = a **reusable artifact** (persists after a
+  build); the runtime Wazuh environment (`terraform/wazuh-project/`) = **still pending** and
+  disposable-by-design when it does exist.
+- **The runtime Wazuh VPC (`10.0.0.0/16`) does not exist in AWS.** Only the build VPC
+  (`10.10.0.0/24`) is applied. The two are isolated — no peering, no transit gateway.
 - The historical design (`t3.large`, ~50 GB EBS, Wazuh `v4.14.7`, `git clone wazuh-docker`)
-  is **partly superseded** by commit `333460c`, which moved to `c5a.xlarge`, dropped the
-  explicit root volume, and switched the intended delivery model to "images from private ECR
-  + config from S3" (ratified as [DECISIONS.md](DECISIONS.md) D-009). The new model is not
-  yet wired up, and the old version number does not carry over automatically (Open
+  is **partly superseded** by `333460c` (→ `c5a.xlarge`, no explicit root volume, delivery
+  via private ECR + S3 — [DECISIONS.md](DECISIONS.md) D-009). The delivery model is not yet
+  wired up (B2/B3) and the old version number does not carry over automatically (Open
   decision #5).
-- Keep cost in mind: the interface VPC endpoints and the EC2 instance carry recurring
-  hourly cost while deployed. The environment is temporary by design — always
-  `terraform destroy` after validating (D-006), subject to the persistence boundary that
-  Open decisions #1–#2 will define.
-- **B1 status:** the Packer provisioner is corrected **in code only** (`bcb9013`). "AMI
-  provisioning implemented" ≠ "AMI Validated". Nothing is built until an approved
-  `packer build` + smoke test succeeds. Do not mark B1 fully closed until then.
-- **PB-1 / D-012 status:** the persistent build network is **implemented in code, not
-  applied**. It is a separate Terraform root (`terraform/packer-build/`) with a **persistent**
-  lifecycle — it is deliberately outside the Wazuh runtime deploy→…→destroy cycle. Its
-  resources carry no hourly cost (VPC/subnet/IGW/route/SG/IAM only). The Wazuh runtime root
-  is unchanged and still disposable.
-- **Two Terraform roots now.** This is the first justified split (D-008 → D-012). It does
-  **not** license moving the ECR/S3 resources or resolving the artifact-persistence /
-  bootstrap-ordering open decisions — those remain open and out of scope here.
-- **PB-4 / D-013 status:** the Packer **execution role** + least-privilege policy + Packer
-  `assume_role` are **in code only** (this branch). The role does **not** exist in AWS, the
-  policy is **not** operationally validated, no `packer build` has run. The first real build
-  is the test of the derived permission set — expect one or two `AccessDenied` iterations
-  and add only the specific missing action (never `ec2:*` / `ssm:*`). **No AWS account ID
-  is committed to source** — Terraform discovers it (`data.aws_caller_identity`) and Packer
-  gets the execution-role ARN from the Terraform output. IAM Identity Center is in
-  `us-east-2`; `CloudGuardOperator` is the normal identity; the bootstrap `terraform apply`
-  of `terraform/packer-build/` uses `AdministratorAccess`.
+- Cost: `terraform/packer-build/` carries **no hourly cost** (control-plane objects only).
+  The runtime, once deployed, carries endpoint + EC2 hourly cost — `terraform destroy` the
+  runtime after validating (D-006), subject to the persistence boundary Open decisions
+  #1–#2 will define. Never `terraform destroy` the build root as part of that cycle.
+- **Two Terraform roots** — the first justified split (D-008 → D-012). This does **not**
+  license moving the ECR/S3 resources or resolving the artifact-persistence /
+  bootstrap-ordering open decisions.
+- **PB-4 / D-013:** the execution role's least-privilege policy is derived from the *current*
+  `amazon-ebs` config. If that config changes (new source options, new communicator/interface),
+  re-derive — add only the specific denied action per real `AccessDenied`, never `ec2:*` /
+  `ssm:*` / all documents. No AWS account ID is in source (Terraform discovers it); Packer
+  gets the role ARN from `terraform output`.
 - When you finish a substantial task, update this file (Snapshot, milestone, blockers/gaps,
   open decisions, next task) and any other doc whose assumptions changed.
