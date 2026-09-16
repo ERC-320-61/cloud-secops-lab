@@ -37,17 +37,37 @@ source "amazon-ebs" "wazuh" {
   instance_type = var.instance_type
   ssh_username  = "ubuntu"
 
-  # Start from the operator's normal credentials (an active CloudGuardOperator
-  # IAM Identity Center session — e.g. AWS_PROFILE=cloudguard), then assume the
-  # dedicated least-privilege execution role (terraform/packer-build/, PB-4) for
-  # every AWS operation. No keys or human usernames are embedded. See
-  # packer/build-identity.pkr.hcl and docs/DECISIONS.md D-013.
+  # Start from the operator's normal credentials in the Security account (an
+  # active CloudGuardOperator IAM Identity Center session — e.g.
+  # AWS_PROFILE=security, D-014), then assume the dedicated least-privilege
+  # execution role (terraform/packer-build/, PB-4) for every AWS operation. No
+  # keys or human usernames are embedded. See packer/build-identity.pkr.hcl and
+  # docs/DECISIONS.md D-013.
   assume_role {
     role_arn     = var.packer_execution_role_arn
     session_name = "cloudguard-packer-build"
   }
 
   ami_name = "cloud-secops-wazuh-{{timestamp}}"
+
+  # Cross-account distribution (docs/DECISIONS.md D-014 / D-015).
+  #
+  # The AMI is OWNED by the Security account (this build runs there) and SHARED
+  # to the Lab account by explicit launch permission only:
+  #   - ami_users      -> launch permission on the AMI
+  #   - snapshot_users -> createVolumePermission on the backing snapshot(s);
+  #                       AWS requires this too for the Lab account to launch an
+  #                       EBS-backed AMI it does not own.
+  # The AMI is NOT copied into Lab and NOT made public. var.lab_account_id is
+  # required (no default) and is non-secret account metadata — see
+  # packer/ami-sharing.pkr.hcl.
+  #
+  # The boot volume is unencrypted (no encrypt_boot / kms_key_id), so no KMS
+  # grant is involved. If boot encryption is added later, cross-account launch
+  # will additionally require a customer-managed KMS key shared with Lab (the
+  # default aws/ebs key cannot be shared) — deferred, see D-015.
+  ami_users      = [var.lab_account_id]
+  snapshot_users = [var.lab_account_id]
 
   source_ami_filter {
     filters = {

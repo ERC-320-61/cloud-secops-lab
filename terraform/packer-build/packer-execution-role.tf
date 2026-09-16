@@ -19,7 +19,9 @@
 # re-provisioning.
 #
 # The AWS account ID is discovered at apply time (data.aws_caller_identity) so
-# no account ID is committed to source. Single account per D-007.
+# no account ID is committed to source. This root is applied in the SECURITY
+# account (docs/DECISIONS.md D-014), so the trust resolves to the Security
+# account's CloudGuardOperator role.
 #
 # NOT trusted: arbitrary IAM users, AdministratorAccess, all account roles,
 # external accounts.
@@ -68,10 +70,11 @@ resource "aws_iam_role" "packer_execution" {
 #
 # Derived from packer/wazuh-ami.pkr.hcl as it stands: an EBS-backed AMI built
 # from an existing VPC / subnet / security group (by filter) and an existing
-# instance profile (by name), reached over SSM Session Manager. The config does
-# NOT create a temporary security group, authorize public SSH ingress, use spot
-# instances, use Windows, or customize KMS — so none of those permissions are
-# granted.
+# instance profile (by name), reached over SSM Session Manager, then shared to
+# the Lab account by launch permission (ami_users / snapshot_users). The config
+# does NOT create a temporary security group, authorize public SSH ingress, use
+# spot instances, use Windows, copy the AMI, make it public, or customize KMS —
+# so none of those permissions are granted.
 ############################################################
 
 resource "aws_iam_role_policy" "packer_execution" {
@@ -195,6 +198,35 @@ resource "aws_iam_role_policy" "packer_execution" {
         ]
 
         Resource = "arn:aws:ssm:${var.aws_region}:${local.account_id}:session/*"
+      },
+      {
+        Sid    = "ShareGoldenAmiWithLabByLaunchPermission"
+        Effect = "Allow"
+
+        # Cross-account AMI sharing (docs/DECISIONS.md D-014 / D-015). Packer's
+        # `ami_users` sets launch permission on the resulting AMI and
+        # `snapshot_users` sets createVolumePermission on its backing snapshots
+        # — AWS requires BOTH for the Lab account to launch an EBS-backed AMI it
+        # does not own. These two ModifyAttribute calls are the whole mechanism.
+        #
+        # Allows Packer to grant launch permission on the AMI and
+        # createVolumePermission on its backing snapshots for the explicitly
+        # configured Lab account. The Packer configuration supplies only the
+        # Lab account ID; no public sharing is configured.
+        #
+        # This permission does not allow image copy/delete or broader EC2
+        # administration and is confined to this region's image/snapshot
+        # namespace. The target account ID is supplied to Packer through
+        # PKR_VAR_lab_account_id and is not embedded in this IAM policy.
+        Action = [
+          "ec2:ModifyImageAttribute",
+          "ec2:ModifySnapshotAttribute"
+        ]
+
+        Resource = [
+          "arn:aws:ec2:${var.aws_region}::image/*",
+          "arn:aws:ec2:${var.aws_region}::snapshot/*"
+        ]
       }
     ]
   })

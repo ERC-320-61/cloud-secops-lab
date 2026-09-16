@@ -71,9 +71,11 @@ truth for what exists.
 - **Do not make public infrastructure the default.** No ALB / public IP / public dashboard
   for administration. SSM is the access path.
 - **Avoid unnecessary abstractions.** Add a Terraform root only when there's a concrete
-  reason (the two that exist — `terraform/wazuh-project/` and `terraform/packer-build/` —
-  are justified by materially different lifecycles: [docs/DECISIONS.md](docs/DECISIONS.md)
-  D-012). No speculative modules/wrappers.
+  reason (the three that exist — `terraform/wazuh-project/` (Lab runtime),
+  `terraform/packer-build/` (Security build network), `terraform/wazuh-artifacts/` (Security
+  ECR/S3) — are justified by materially different lifecycles and account ownership:
+  [docs/DECISIONS.md](docs/DECISIONS.md) D-012, D-016). No speculative modules/wrappers, no
+  provider-alias "apply everything at once" refactor.
 - **Do not deploy or spend without being asked.** No `terraform apply`/`destroy`, Packer
   build, ECR push, or other AWS mutation unless the task explicitly calls for it.
 
@@ -120,10 +122,11 @@ here.**
 | | |
 | --- | --- |
 | Project | CloudGuard / `cloud-secops-lab` — reusable AWS SecOps lab |
-| Region | `us-east-2` · VPC `10.0.0.0/16` · private subnet `10.0.1.0/24` |
-| Access model | AWS Systems Manager (Session Manager + port forwarding); no public admin |
-| Lifecycle | deploy → test → validate → document → destroy |
-| Terraform roots | [terraform/wazuh-project/](terraform/wazuh-project/) (disposable Wazuh runtime) · [terraform/packer-build/](terraform/packer-build/) (persistent Packer build network — D-012) |
+| Region | `us-east-2` · runtime VPC `10.0.0.0/16` / subnet `10.0.1.0/24` · build VPC `10.10.0.0/24` |
+| Accounts | Management / Security / Lab (D-014). Each Terraform root is applied with its account's own SSO profile — no provider aliases. **Nothing applied in Security or Lab yet.** |
+| Access model | IAM Identity Center permission sets; AWS Systems Manager (Session Manager + port forwarding) for host admin; no public admin |
+| Lifecycle | deploy → test → validate → document → destroy (the **Lab** runtime root only; the Security roots are persistent) |
+| Terraform roots | [terraform/wazuh-project/](terraform/wazuh-project/) (disposable Wazuh runtime — **Lab**) · [terraform/packer-build/](terraform/packer-build/) (persistent Packer build network — **Security**, D-012) · [terraform/wazuh-artifacts/](terraform/wazuh-artifacts/) (persistent ECR/S3 — **Security**, D-016) |
 | Current phase / next task / blockers / open decisions | **See [docs/CURRENT_STATE.md](docs/CURRENT_STATE.md)** |
 | Roadmap + status model | [docs/ROADMAP.md](docs/ROADMAP.md) |
 | Not part of the MVP at all | malware-analysis pipeline, vulnerability-management pipeline (possible future expansion — [docs/PROJECT_CHARTER.md](docs/PROJECT_CHARTER.md)) |

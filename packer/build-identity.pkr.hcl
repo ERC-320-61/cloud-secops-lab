@@ -2,9 +2,10 @@
 # Packer execution identity (PB-4)
 #
 # `packer build` starts from the operator's normal AWS credentials — an active
-# IAM Identity Center session for CloudGuardOperator, e.g.
+# IAM Identity Center session for CloudGuardOperator in the SECURITY account
+# (D-014), e.g.
 #
-#     AWS_PROFILE=cloudguard packer build .
+#     AWS_PROFILE=security packer build .
 #
 # — and then assumes the dedicated least-privilege execution role created by
 # terraform/packer-build/ for all AWS work. No access keys, secrets, human
@@ -16,6 +17,9 @@
 #     export PKR_VAR_packer_execution_role_arn="$(
 #       terraform -chdir=terraform/packer-build output -raw packer_execution_role_arn
 #     )"
+#
+# A second required var, lab_account_id (packer/ami-sharing.pkr.hcl), carries the
+# Lab account id for the cross-account AMI share (D-015).
 ############################################################
 
 variable "packer_execution_role_arn" {

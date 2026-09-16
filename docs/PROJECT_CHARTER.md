@@ -98,18 +98,25 @@ deploy → test → validate → document → destroy
 The repository is permanent. Any deployed AWS environment is expected to be short-lived.
 See [RUNBOOK.md](RUNBOOK.md).
 
-## Target account model
+## Account model
 
 | Account | Responsibility | State |
 | --- | --- | --- |
-| **Management** | AWS Organizations, account and guardrail management | Planned |
-| **Security** | Wazuh, CloudTrail, Security Hub, GuardDuty, centralized logging storage, EventBridge, Firehose, SQS, Step Functions, Lambda, SNS, selected Config/CloudWatch, Systems Manager, private security VPC/networking | Planned (target placement) |
-| **Lab** | Temporary Windows/Linux test hosts, Wazuh agents, workloads that generate telemetry/findings, security test scenarios | Planned |
+| **Management** | AWS Organizations, IAM Identity Center, billing / cost / governance. No normal workload or security tooling after migration. | Accepted (D-014); still holds the legacy Packer build infra + historical AMI pending migration |
+| **Security** | Persistent Packer build infrastructure + Packer execution role; **golden Wazuh AMI owner**; persistent Wazuh ECR/S3 artifact layer; future centralized security tooling — CloudTrail, Security Hub, GuardDuty, centralized logging, EventBridge, Firehose, SQS, Step Functions, Lambda, SNS, selected Config/CloudWatch, private security VPC. | Accepted (D-014); **not yet applied** |
+| **Lab** | Disposable Wazuh runtime; Windows/Linux security-test hosts; Wazuh agents; workloads that generate telemetry/findings; SprintOps Tracker dev/test. | Accepted (D-014); **not yet applied** |
 
-Today the repository deploys into a **single AWS account** with one Terraform provider — the
-Phase 1 private networking, IAM, ECR, S3, and EC2 all live there, **not** in a dedicated
-Security account. The multi-account split is target architecture and the transition point is
-an open decision ([DECISIONS.md](DECISIONS.md) D-007).
+Access is via **IAM Identity Center** permission sets: Management `cloudguard-admin`;
+Security `security-admin` (AdministratorAccess) and `security` (`CloudGuardOperator`); Lab
+`lab-admin` (AdministratorAccess) and `lab` (`LabOperator`).
+
+The three-account model is **accepted** ([DECISIONS.md](DECISIONS.md) D-014, superseding the
+earlier open transition-point question in D-007). The accounts and SSO access exist, but
+**no CloudGuard infrastructure has been applied into Security or Lab yet** — what is in AWS
+today is the legacy single-account placement in Management (persistent Packer build
+infrastructure + a validated base AMI). Terraform code is account-agnostic (no account IDs
+committed); migration is driven by which credentials run each `terraform apply`. The
+migration sequence is in [RUNBOOK.md](RUNBOOK.md).
 
 ## Wazuh's intended role
 
@@ -179,8 +186,11 @@ pipelines.
 | Vulnerability-management pipeline | Out of MVP scope; possible future expansion. |
 | Multi-AZ / HA Wazuh | Unnecessary complexity and cost for a temporary lab. |
 
-Not deferred, but **open decisions** (tracked in [CURRENT_STATE.md](CURRENT_STATE.md) →
-Open decisions): artifact bucket encryption SSE-S3 vs. customer-managed KMS key
-([DECISIONS.md](DECISIONS.md) D-010); remote Terraform state backend / separate lifecycle for
-artifact-bootstrap infrastructure; the multi-account transition point (D-007); and the
-Wazuh version to pin.
+Recently resolved: the three-account transition ([DECISIONS.md](DECISIONS.md) D-014,
+superseding D-007); artifact-bucket encryption — SSE-S3 + enforced TLS, CMK deferred (D-010);
+a separate Terraform root/state for the persistent artifact layer (D-016); the pinned Wazuh
+version — **4.14.7** (D-009).
+
+Still **open** (tracked in [CURRENT_STATE.md](CURRENT_STATE.md) → Open decisions): the
+artifact/image **publication ordering** relative to the runtime apply; a remote Terraform
+state backend; artifact/image retention between lab sessions.

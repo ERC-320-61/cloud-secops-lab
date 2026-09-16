@@ -55,10 +55,17 @@ variable "build_subnet_cidr" {
 ############################################################
 # Operator identity (IAM Identity Center) for the Packer execution role (PB-4)
 #
-# The AWS account ID is discovered at apply time
-# (data.aws_caller_identity.current.account_id in packer-execution-role.tf), so
+# Human access is via IAM Identity Center (the instance lives in the Management
+# account; Identity Center provisions AWSReservedSSO_* roles into each member
+# account). This root is applied in the SECURITY account (docs/DECISIONS.md
+# D-014); the trust policy therefore resolves to
+#   arn:aws:iam::<security-account>:role/aws-reserved/sso.amazonaws.com/<region>/AWSReservedSSO_CloudGuardOperator_*
+# where <security-account> comes from data.aws_caller_identity at apply time, so
 # no account ID is committed to source. The generated AWSReservedSSO role suffix
-# is matched with a wildcard in the trust policy and is never set here.
+# is matched with a wildcard and is never set here.
+#
+# operator_permission_set_name = "CloudGuardOperator" is the permission set the
+# `security` profile assumes in the Security account for routine Packer runs.
 ############################################################
 
 variable "identity_center_region" {
@@ -68,7 +75,7 @@ variable "identity_center_region" {
 }
 
 variable "operator_permission_set_name" {
-  description = "IAM Identity Center permission-set name for the normal CloudGuard operator identity (CloudGuardOperator)"
+  description = "IAM Identity Center permission-set name for the normal CloudGuard operator identity (CloudGuardOperator, assumed via the `security` profile in the Security account)"
   type        = string
   default     = "CloudGuardOperator"
 }

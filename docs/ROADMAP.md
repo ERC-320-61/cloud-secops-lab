@@ -13,14 +13,17 @@
 > "Code exists but has never been deployed" is **Implemented** or **Partial**, never
 > **Validated**. Phase exit criteria require **Validated**.
 
-Current position: **Phase 1 — Private Wazuh Platform — in progress. The Packer prerequisite
-phase (B1, PB-1…PB-4) is COMPLETE and a validated base AMI exists. The runtime Wazuh
-deployment (VPC `10.0.0.0/16`, B2, B3, end-to-end SSM validation) is the remaining work.**
+Current position: **Phase 1 — Private Wazuh Platform — in progress.** The Packer prerequisite
+phase (B1, PB-1…PB-4) is COMPLETE and a validated base AMI exists **in the Management
+account**. The three-account model is now **accepted** ([DECISIONS.md](DECISIONS.md) D-014):
+Phase 1 now also covers migrating the build path to **Security**, standing up the persistent
+artifact layer in Security, and deploying the disposable runtime in **Lab** — alongside the
+remaining B2/B3 and end-to-end SSM validation.
 
 | Phase | Title | Status |
 | --- | --- | --- |
 | 0 | Repository / Project Foundation | Complete (merged) |
-| 1 | Private Wazuh Platform | In progress — Packer prerequisite phase + validated base AMI **complete**; runtime Wazuh deployment (B2/B3/apply/validate) remaining |
+| 1 | Private Wazuh Platform | In progress — Packer prerequisite phase + validated base AMI **complete** (in Management); three-account migration (D-014), persistent artifact root (D-016), B2/B3, hardening, and runtime apply/validate in Lab remaining |
 | 2 | AWS Security Sources | Planned |
 | 3 | AWS Findings → Wazuh Integration | Planned |
 | 4 | Selective Automated Response | Planned |
@@ -83,33 +86,50 @@ Nothing in Phase 2+ starts until this is done. Canonical blocker/gap detail:
 | Least-privilege Packer execution IAM (`cloud-secops-lab-packer-execution-role` + inline policy; `CloudGuardOperator` SSO trust; `assume_role`) | **Complete (Validated)** | **PB-4 / [DECISIONS.md](DECISIONS.md) D-013** — applied; first build exposed one missing entry (`ssm:StartSession` on `AWS-StartPortForwardingSession`), corrected narrowly; a subsequent build ran end-to-end through the role |
 | Validated base AMI produced by the Packer workflow | **Complete (Validated)** | built + independently smoke-tested via Session Manager (Docker 29.8.0, Compose v5.5.1, AWS CLI v2.36.40, `vm.max_map_count = 262144`, Docker enabled, `ubuntu` in `docker` group, ssm-agent enabled/active, `/var/log/cloudguard-ami-build.txt` present). Evidence AMI `ami-0b1bf8942dfc0daf1` (`us-east-2`) — historical evidence, not a config constant |
 
+### Three-account migration — REMAINING (D-014)
+
+| Item | Status | Blocker / note |
+| --- | --- | --- |
+| Apply `terraform/packer-build/` in **Security** (`security-admin`) | Planned | account-agnostic code; no change needed beyond credentials |
+| Build + validate a **new Security-owned** base AMI (`security`) | Planned | supersedes the Management-account `ami-0b1bf8942dfc0daf1` (evidence only) |
+| Share the golden AMI to **Lab** by launch permission (`PKR_VAR_lab_account_id`) | Planned | **D-015** — `ami_users` / `snapshot_users`; first cross-account build tests the 2 new IAM actions |
+| Confirm Lab can launch the shared AMI | Planned | manual check from `lab-admin` |
+| Destroy the **legacy** Packer build infrastructure in **Management** | Planned | only after the Security path is proven |
+| Apply `terraform/wazuh-artifacts/` in **Security** (`security-admin`) | Planned | **D-016** — persistent ECR + S3 |
+
 ### Runtime Wazuh deployment — REMAINING (Planned)
 
 | Item | Status | Blocker / note |
 | --- | --- | --- |
-| Checked-in Wazuh stack artifacts (Compose + cert-gen + manager/indexer/dashboard config, deliberately pinned version) | Planned | **B3** |
-| S3 artifact publishing workflow | Planned | **B3**; depends on the bootstrap-lifecycle decision (Open decision #1/#2) |
-| ECR image mirror/publish workflow | Planned | **B2**; depends on the pinned version (Open decision #5) |
+| Checked-in Wazuh stack artifacts (Compose + cert-gen + manager/indexer/dashboard config, pinned to **4.14.7**) | Planned | **B3** (D-009) |
+| S3 artifact publishing workflow (to the Security artifact bucket) | Planned | **B3**; depends on the publication-ordering decision (Open decision #1) |
+| ECR image mirror/publish workflow (to the Security ECR repos, Wazuh **4.14.7**) | Planned | **B2** (D-009) |
+| Cross-account access: ECR repo policy + S3 bucket policy for the Lab runtime | Planned | needed before the Lab runtime can pull images / read config |
 | EC2 hardening: dedicated security group | Planned | Phase 1 completion gap |
 | EC2 hardening: explicit root volume sizing | Planned | Phase 1 completion gap (~50 GB is a reference, not a requirement) |
 | EC2 hardening: IMDSv2 enforcement (`http_tokens = "required"`) | Planned | Phase 1 completion gap |
 | Useful Terraform outputs (runtime instance id, bucket, SSM command) | Planned | [outputs.tf](../terraform/wazuh-project/outputs.tf) empty |
-| Bootstrap lifecycle defined (prereqs → publish artifacts/images → host) | Planned | Open decision #1/#2 in [CURRENT_STATE.md](CURRENT_STATE.md) |
-| Runtime `terraform apply` of `terraform/wazuh-project/` (`10.0.0.0/16` VPC + EC2 from the base AMI) | Planned | not applied — depends on B2/B3 + the bootstrap decision |
+| Publication ordering defined (prereqs → publish artifacts/images → host) | Planned | Open decision #1 in [CURRENT_STATE.md](CURRENT_STATE.md) |
+| Runtime `terraform apply` of `terraform/wazuh-project/` in **Lab** (`10.0.0.0/16` VPC + EC2 from the shared AMI) | Planned | not applied — depends on the migration + B2/B3 + cross-account policies |
+| Remove the superseded `ecr.tf` / `storage.tf` from `terraform/wazuh-project/` | Planned | **blocked** by the `stash@{0}` "preserve ecr comment changes" — resolve the stash first (D-016) |
 | Working Wazuh dashboard via SSM port forwarding | Planned | depends on the runtime deploy + B2/B3 |
 | Full deploy → validate → destroy run of the runtime, recorded | Planned | **Phase-exit** gate |
 
 ### Phase 1 exit criteria
 
 **Done:** `terraform apply` of `terraform/packer-build/` (persistent) → `packer build`
-(assumes the execution role) → base AMI built and smoke-tested.
+(assumes the execution role) → base AMI built and smoke-tested — **in the Management
+account** (D-014 migration now supersedes this placement).
 
-**Remaining:** decide the bootstrap lifecycle + Wazuh version → B3 (artifact set + S3
-publish) → B2 (ECR image mirror) → EC2 hardening + runtime outputs → `terraform apply` of
-`terraform/wazuh-project/` with the validated AMI → SSM shell into the instance → SSM
-port-forward to a healthy dashboard (manager + indexer + dashboard up) → `terraform destroy`
-of the runtime only → verified cleanup — with [RUNBOOK.md](RUNBOOK.md), [DECISIONS.md](DECISIONS.md),
-and [CURRENT_STATE.md](CURRENT_STATE.md) updated to the real commands and decisions.
+**Remaining:** migrate the build path to Security (apply `packer-build` in Security → build
++ validate a new Security-owned AMI → share to Lab → confirm Lab launch → retire the
+Management copy) → apply `terraform/wazuh-artifacts/` in Security → B3 (artifact set + S3
+publish, Wazuh 4.14.7) → B2 (ECR image mirror) → cross-account ECR/S3 policies → EC2
+hardening + runtime outputs → `terraform apply` of `terraform/wazuh-project/` in Lab with
+the shared AMI → SSM shell → SSM port-forward to a healthy dashboard (manager + indexer +
+dashboard up) → `terraform destroy` of the runtime only → verified cleanup — with
+[RUNBOOK.md](RUNBOOK.md), [DECISIONS.md](DECISIONS.md), and [CURRENT_STATE.md](CURRENT_STATE.md)
+updated to the real commands and decisions.
 
 ---
 
@@ -201,10 +221,10 @@ gate Phase 0 completion or Phase 1 exit.
 
 | Item | Notes |
 | --- | --- |
-| CI checks (`terraform fmt -check`, `validate`, `tflint`) | Low cost, high value; add when convenient |
+| CI checks (`terraform fmt -check`, `validate`, `tflint`) | Low cost, high value; add when convenient — now **three** roots to cover |
 | Contributor guide / PR checklist | Optional |
-| Remote Terraform state backend + locking | Acceptable as local state for a single operator; revisit if multiple operators or if state must be shared |
-| S3 artifact bucket: versioning + TLS-only bucket policy | Hardening; fold into Phase 1 completion if cheap |
+| Remote Terraform state backend + locking | Local state today; three roots and multiple accounts make this more attractive — revisit when the migration is done |
+| S3 artifact bucket: versioning | The TLS-deny policy is now in `terraform/wazuh-artifacts/` (D-010); object versioning is still optional hardening |
 
 ---
 
@@ -221,8 +241,10 @@ gate Phase 0 completion or Phase 1 exit.
 
 | Item | Tracked in |
 | --- | --- |
-| Artifact/image persistence between lab sessions vs. `terraform destroy` | [CURRENT_STATE.md](CURRENT_STATE.md) Open decision #1 |
-| Separate Terraform lifecycle/state for artifact-bootstrap infrastructure | Open decision #2 |
-| Multi-account transition point | [DECISIONS.md](DECISIONS.md) D-007 (Proposed) |
-| Phase 1 artifact bucket encryption — SSE-S3 vs. customer-managed KMS key | [DECISIONS.md](DECISIONS.md) D-010 (Proposed) |
-| Wazuh version to pin when artifacts/images are (re)built | Open decision #5 |
+| Artifact/image **publication ordering** relative to the runtime apply | [CURRENT_STATE.md](CURRENT_STATE.md) Open decision #1 |
+| Remote Terraform state backend (now 3 roots, 2 accounts) | [CURRENT_STATE.md](CURRENT_STATE.md) Open decision #2 |
+| Artifact/image retention between lab sessions | [CURRENT_STATE.md](CURRENT_STATE.md) Open decision #3 |
+
+**Resolved since the last revision:** multi-account transition → D-014 (was D-007);
+separate artifact root/state → D-016; artifact-bucket encryption → D-010 (SSE-S3 + TLS,
+CMK deferred); Wazuh version pin → 4.14.7 (D-009).
