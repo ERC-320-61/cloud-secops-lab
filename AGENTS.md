@@ -71,11 +71,14 @@ truth for what exists.
 - **Do not make public infrastructure the default.** No ALB / public IP / public dashboard
   for administration. SSM is the access path.
 - **Avoid unnecessary abstractions.** Add a Terraform root only when there's a concrete
-  reason (the three that exist — `terraform/wazuh-project/` (Lab runtime),
-  `terraform/packer-build/` (Security build network), `terraform/wazuh-artifacts/` (Security
-  ECR/S3) — are justified by materially different lifecycles and account ownership:
-  [docs/DECISIONS.md](docs/DECISIONS.md) D-012, D-016). No speculative modules/wrappers, no
-  provider-alias "apply everything at once" refactor.
+  reason (the four that exist — `terraform/wazuh-project/` (Lab runtime, disposable),
+  `terraform/wazuh-runtime-identity/` (Lab EC2 IAM identity, persistent),
+  `terraform/packer-build/` (Security build network, persistent),
+  `terraform/wazuh-artifacts/` (Security ECR/S3, persistent) — are justified by materially
+  different lifecycles and account ownership: [docs/DECISIONS.md](docs/DECISIONS.md) D-012,
+  D-016, D-018). No speculative modules/wrappers, no provider-alias "apply everything at
+  once" refactor, and no circular dependency between roots (D-018) — each root's inputs come
+  only from roots applied strictly before it.
 - **Do not deploy or spend without being asked.** No `terraform apply`/`destroy`, Packer
   build, ECR push, or other AWS mutation unless the task explicitly calls for it.
 
@@ -123,10 +126,10 @@ here.**
 | --- | --- |
 | Project | CloudGuard / `cloud-secops-lab` — reusable AWS SecOps lab |
 | Region | `us-east-2` · runtime VPC `10.0.0.0/16` / subnet `10.0.1.0/24` · build VPC `10.10.0.0/24` |
-| Accounts | Management / Security / Lab (D-014). Each Terraform root is applied with its account's own SSO profile — no provider aliases. **Nothing applied in Security or Lab yet.** |
+| Accounts | Management / Security / Lab (D-014). Each Terraform root is applied with its account's own SSO profile — no provider aliases. What is currently applied where is volatile — see [docs/CURRENT_STATE.md](docs/CURRENT_STATE.md). |
 | Access model | IAM Identity Center permission sets; AWS Systems Manager (Session Manager + port forwarding) for host admin; no public admin |
 | Lifecycle | deploy → test → validate → document → destroy (the **Lab** runtime root only; the Security roots are persistent) |
-| Terraform roots | [terraform/wazuh-project/](terraform/wazuh-project/) (disposable Wazuh runtime — **Lab**) · [terraform/packer-build/](terraform/packer-build/) (persistent Packer build network — **Security**, D-012) · [terraform/wazuh-artifacts/](terraform/wazuh-artifacts/) (persistent ECR/S3 — **Security**, D-016) |
+| Terraform roots | [terraform/wazuh-project/](terraform/wazuh-project/) (disposable Wazuh runtime — **Lab**) · [terraform/wazuh-runtime-identity/](terraform/wazuh-runtime-identity/) (persistent Lab EC2 IAM identity — **Lab**, D-018) · [terraform/packer-build/](terraform/packer-build/) (persistent Packer build network — **Security**, D-012) · [terraform/wazuh-artifacts/](terraform/wazuh-artifacts/) (persistent ECR/S3 — **Security**, D-016). Apply order for the three interdependent ones: identity → artifacts → runtime (D-018, one-directional). |
 | Current phase / next task / blockers / open decisions | **See [docs/CURRENT_STATE.md](docs/CURRENT_STATE.md)** |
 | Roadmap + status model | [docs/ROADMAP.md](docs/ROADMAP.md) |
 | Not part of the MVP at all | malware-analysis pipeline, vulnerability-management pipeline (possible future expansion — [docs/PROJECT_CHARTER.md](docs/PROJECT_CHARTER.md)) |

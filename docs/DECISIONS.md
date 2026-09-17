@@ -418,20 +418,24 @@
   cross-account value — the Lab account ID for AMI sharing — is an explicit required Packer
   variable with no default (`PKR_VAR_lab_account_id`), documented as non-secret account
   metadata (**D-015**).
-- **Migration sequence (nothing below has happened yet):**
-  1. Apply `terraform/packer-build/` in **Security** (`security-admin`).
+- **Migration sequence:**
+  1. Apply `terraform/packer-build/` in **Security** (`security-admin`). — **Done** (operator-reported, 2026-09-16)
   2. Build and validate a **new** Security-owned base AMI (`security`, Packer assumes the
-     execution role).
-  3. Share that AMI to **Lab** by launch permission (**D-015**).
-  4. Confirm Lab can launch the shared AMI.
-  5. Destroy the **legacy** Packer build infrastructure in **Management**.
-  6. Apply `terraform/wazuh-artifacts/` in **Security** (`security-admin`).
-  7. Continue B3 (artifact set + S3 publish) and B2 (ECR image mirror).
-  8. Deploy the disposable Wazuh runtime in **Lab**.
-- **Current reality (2026-09-08):** the validated historical AMI (`ami-0b1bf8942dfc0daf1`,
-  `us-east-2`) and the old Packer build infrastructure are still in **Management**. The
-  Security and Lab accounts and their SSO access exist. **No CloudGuard infrastructure has
-  been applied in Security or Lab.**
+     execution role). — **Done** (operator-reported)
+  3. Share that AMI to **Lab** by launch permission (**D-015**). — **Done** (operator-reported)
+  4. Confirm Lab can launch the shared AMI (and SSM smoke test). — **Done** (operator-reported)
+  5. Destroy the **legacy** Packer build infrastructure in **Management**. — Planned
+  6. Apply `terraform/wazuh-artifacts/` in **Security** (`security-admin`). — Planned
+  7. Continue B3 (artifact set + S3 publish) and B2 (ECR image mirror). — Planned
+  8. Deploy the disposable Wazuh runtime in **Lab**. — Planned
+- **Current reality (2026-09-16):** per the operator, steps 1–4 above have run: the Packer
+  build infrastructure is applied in **Security**, a new Security-owned golden AMI has been
+  built + validated, shared to **Lab**, and confirmed launchable there with a passing SSM
+  smoke test. This entry records that as reported — **this repository pass made no AWS
+  calls and captured no independent evidence** (no AMI id / account id recorded here). The
+  historical AMI (`ami-0b1bf8942dfc0daf1`) and the legacy Packer build infrastructure remain
+  in **Management** pending step 5. **`terraform/wazuh-artifacts/` and
+  `terraform/wazuh-project/` are still not applied anywhere** (steps 6–8).
 - **Consequences:** [ARCHITECTURE.md](ARCHITECTURE.md) target account model moves from
   Planned to Accepted (migration pending). [PROJECT_CHARTER.md](PROJECT_CHARTER.md) target
   account model is updated. The multi-account transition is now Phase 1 work, tracked in
@@ -511,15 +515,202 @@
   - **Scope is the persistent infrastructure only.** It deliberately does **not** contain
     the B2 image-mirror workflow, the B3 Wazuh Compose/config artifact set, certificate
     generation, runtime bootstrap, runtime EC2, or any Security Hub / EventBridge wiring.
-  - The **legacy** `ecr.tf` / `storage.tf` in `terraform/wazuh-project/` are **superseded**.
-    They are **not removed in this change** because an unrelated stash ("preserve ecr
-    comment changes") modifies `ecr.tf` and deleting the file would break that stash;
-    removal is tracked in [CURRENT_STATE.md](CURRENT_STATE.md) → next work.
+  - The **legacy** `ecr.tf` / `storage.tf` in `terraform/wazuh-project/` are **removed**
+    (superseded by this root — see **D-017**). An unrelated stash ("preserve ecr comment
+    changes") still modifies the now-deleted `ecr.tf`; it was left untouched (not popped,
+    applied, or dropped) — popping it later will conflict on a deleted file, which is
+    expected. See [CURRENT_STATE.md](CURRENT_STATE.md).
   - Cross-account access (an ECR repository policy and an S3 bucket policy letting the Lab
-    runtime pull images / read config) is **not** implemented yet — tracked as next work.
+    runtime pull images / read config) is now **implemented in code** — see **D-017**. It
+    has not been applied.
 - **Relationship to D-008:** the third root is justified by the same materially-different
   lifecycle argument as D-012, plus cross-account ownership. Not speculative abstraction.
 - **Consequences:** the runbook gains a "apply `terraform/wazuh-artifacts/` in Security"
-  step. `terraform/wazuh-project/` shrinks to genuinely disposable runtime resources once
-  the stash is resolved and the legacy files are removed. Evidence:
-  [terraform/wazuh-artifacts/](../terraform/wazuh-artifacts/).
+  step. `terraform/wazuh-project/` no longer owns the ECR/S3 resources it used to — see
+  **D-017**. Evidence: [terraform/wazuh-artifacts/](../terraform/wazuh-artifacts/).
+
+---
+
+## D-017 — Lab consumes Security-owned ECR/S3 via explicit variables + narrow resource-based cross-account grants
+
+- **Status:** Accepted (2026-09-16); **IAM ownership and apply ordering revised by D-018**
+  (same day) — the Lab EC2 role moved out of `terraform/wazuh-project/` into a new
+  persistent root, and the two-pass apply this entry describes is **no longer the design**.
+  This entry is kept for the record of *why* explicit variables replace resource ownership
+  and *why* `data.aws_caller_identity` is avoided — both of those points still hold. Read
+  D-018 for the current apply order and IAM ownership.
+- **Context:** D-016 moved the persistent ECR repositories and S3 bucket to
+  `terraform/wazuh-artifacts/` in **Security**, but left the original resource definitions in
+  `terraform/wazuh-project/` (Lab) untouched, and left cross-account pull/read access
+  unimplemented. Two problems needed closing: (1) `terraform/wazuh-project/` still *owned*
+  (would re-create) ECR repos and a bucket it should only *consume*; (2) even with the
+  resources correctly owned by Security, cross-account access requires an explicit grant on
+  **both** sides (the caller's identity-based policy AND the resource's resource-based
+  policy) — neither existed.
+- **Decision — `terraform/wazuh-project/` no longer owns these resources:**
+  - `ecr.tf` and `storage.tf` (and the `aws_s3_bucket_public_access_block` /
+    `aws_s3_bucket_server_side_encryption_configuration` resources in the latter) are
+    **removed** from this root.
+  - Three explicit, required (no-default) variables replace them:
+    `wazuh_ecr_registry` (string — the Security ECR registry hostname, format-validated),
+    `wazuh_ecr_repository_arns` (map(string), exactly 3 entries — the Security repository
+    ARNs), `wazuh_artifact_bucket_name` (string — the Security bucket name). Each is sourced
+    from the corresponding `terraform/wazuh-artifacts/` output; **none is discovered via
+    `data.aws_caller_identity`**, which would resolve to Lab's own account, not Security's.
+  - [roles.tf](../terraform/wazuh-project/roles.tf)'s ECR-pull and S3-read identity policies
+    now reference these variables (`values(var.wazuh_ecr_repository_arns)`,
+    `arn:aws:s3:::${var.wazuh_artifact_bucket_name}`) instead of local resource references.
+    `ecr:GetAuthorizationToken` stays `Resource = "*"` — an unavoidable AWS API constraint
+    (it is always an account-local call; the resulting token is then used to authenticate
+    against Security's registry, authorized by the resource-based policy below), not a
+    broadening.
+  - ~~A new output, `wazuh_runtime_role_arn`, exposes the Lab EC2 role's ARN~~ — **superseded
+    by D-018**: this root no longer creates that role at all, so it has no such output any
+    more (see D-018 for where the role lives now).
+- ~~**Decision — narrow, conditional cross-account grants in `terraform/wazuh-artifacts/`**~~
+  **— superseded by D-018.** The original design gated the grant on an optional, default-null
+  `lab_runtime_role_arn` and required re-applying `terraform/wazuh-artifacts/` after
+  `terraform/wazuh-project/` created the role (a **two-pass apply** with a circular
+  dependency between the two roots). D-018 replaced this with a required variable and a
+  single, unconditional grant — read that entry for the current mechanism.
+- **Rejected alternative (at the time):** deriving the ECR ARNs / registry from a
+  `security_account_id` variable plus the repo-naming convention already used in
+  `terraform/wazuh-artifacts/ecr.tf`. Rejected for *this* direction (Lab consuming Security's
+  outputs) because passing the real outputs is more explicit and cannot silently drift — that
+  reasoning still holds for `wazuh_ecr_registry` / `wazuh_artifact_bucket_name`. D-018 later
+  accepted the same deterministic-construction pattern for a *different* purpose (breaking
+  the circular dependency in the other direction) — see that entry for why the trade-off
+  differs there.
+- **AMI boundary unaffected.** No Wazuh application state was added to
+  [packer/scripts/install-wazuh-base.sh](../packer/scripts/install-wazuh-base.sh) or
+  `packer/wazuh-ami.pkr.hcl`; D-011 still holds.
+- **Consequences (as later amended by D-018):** `terraform/wazuh-project/` requires
+  `wazuh_ecr_registry` and `wazuh_artifact_bucket_name` (no longer
+  `wazuh_ecr_repository_arns` — that scoping moved to the identity root) on every apply.
+  **Implemented in code only.** Evidence:
+  [terraform/wazuh-project/variables.tf](../terraform/wazuh-project/variables.tf),
+  [terraform/wazuh-project/outputs.tf](../terraform/wazuh-project/outputs.tf),
+  [terraform/wazuh-artifacts/variables.tf](../terraform/wazuh-artifacts/variables.tf),
+  [terraform/wazuh-artifacts/ecr.tf](../terraform/wazuh-artifacts/ecr.tf),
+  [terraform/wazuh-artifacts/storage.tf](../terraform/wazuh-artifacts/storage.tf),
+  [terraform/wazuh-artifacts/outputs.tf](../terraform/wazuh-artifacts/outputs.tf).
+
+---
+
+## D-018 — Break the wazuh-artifacts ↔ wazuh-project circular dependency with a persistent Lab identity root
+
+- **Status:** Accepted (2026-09-16)
+- **Context:** D-017 left a genuine circular Terraform dependency: `terraform/wazuh-artifacts/`
+  (Security) needed the Lab runtime role's ARN to grant it cross-account access, but that
+  role was created by `terraform/wazuh-project/` (Lab), which in turn needed
+  `terraform/wazuh-artifacts/`'s outputs (registry, bucket) to configure the runtime. Neither
+  root could be applied first without the other having already run — hence the two-pass
+  apply D-017 described (apply artifacts → apply runtime → re-apply artifacts). This is not
+  an acceptable long-term shape: it is fragile (any redeploy of the disposable runtime that
+  recreates the role invalidates the grant until re-applied) and it obscures the real
+  dependency direction.
+- **Decision — split the IAM identity into its own persistent root:**
+  - A **fourth Terraform root**, [terraform/wazuh-runtime-identity/](../terraform/wazuh-runtime-identity/),
+    owns the Wazuh EC2's `aws_iam_role` and `aws_iam_instance_profile` — moved out of
+    `terraform/wazuh-project/`, which no longer creates any IAM role (**do not duplicate the
+    role in both places**).
+  - It is **persistent**, applied in the **Lab** account, and — unlike the disposable
+    runtime — is **not** part of the deploy → test → validate → destroy cycle (D-006): the
+    identity, and Security's grant to it, survive redeploying the disposable runtime.
+  - Its own least-privilege ECR-pull / S3-read inline policy is built **deterministically**
+    from an explicit, required, format-validated `security_account_id` variable (the same
+    kind of non-secret, explicit account-id pattern already used as `lab_account_id` for the
+    AMI share, D-015) plus the **known, shared naming convention** already fixed in
+    `terraform/wazuh-artifacts/ecr.tf` / `storage.tf` (`"${project_name}/<repo>"` for ECR
+    repos, `"${project_name}-artifacts-${account_id}"` for the bucket) — **not** from a live
+    `terraform/wazuh-artifacts/` output. This is the one deliberate exception to D-017's
+    "pass real outputs, don't derive from naming convention" preference: deriving is the
+    only way to give this root zero Terraform dependency on `wazuh-artifacts`, which is the
+    entire point. The coupling is explicit, commented in both roots' code, and scoped to
+    exactly 3 repository names + 1 bucket-naming pattern — a small, reviewable surface.
+- **Decision — accepted dependency order (one-directional):**
+
+  ```
+  1. terraform/wazuh-runtime-identity/   (Lab, persistent)     — creates the role + profile
+  2. terraform/wazuh-artifacts/          (Security, persistent) — grants that role ARN
+                                                                    cross-account access,
+                                                                    single apply, no re-apply
+  3. terraform/wazuh-project/            (Lab, disposable)      — consumes both: the
+                                                                    instance profile (root 1)
+                                                                    and the registry/bucket
+                                                                    (root 2)
+  ```
+
+  No root depends on one applied *after* it. `terraform/wazuh-artifacts/`'s
+  `lab_runtime_role_arn` variable is now **required, no default** (it is always safe to
+  require — the role always exists by the time this root is applied) and its
+  `aws_ecr_repository_policy` / `aws_s3_bucket_policy` Lab-read statements are now
+  **unconditional** (no more `var.lab_runtime_role_arn != null ? ... : ...`).
+- **Decision — `terraform/wazuh-project/` consumes, never creates, the identity:** a new
+  required variable, `wazuh_runtime_instance_profile_name` (from
+  `terraform/wazuh-runtime-identity/` output `wazuh_runtime_instance_profile_name`), is used
+  directly as `aws_instance.wazuh`'s `iam_instance_profile`. The `wazuh_ecr_repository_arns`
+  variable D-017 added to this root is **removed** — no longer needed here, since this root
+  creates no IAM policy any more.
+- **Rejected alternative:** keep the role in `terraform/wazuh-project/` and have
+  `terraform/wazuh-artifacts/` construct its ARN deterministically too (skip the identity
+  root entirely). Rejected because the role would still be re-created (and briefly not exist)
+  on every disposable-runtime redeploy, so `terraform/wazuh-artifacts/`'s grant would still
+  need to reference a role whose lifecycle it doesn't control — the *dependency* would be
+  one-directional but the *identity's lifecycle* would still be wrong (tied to disposable
+  infrastructure). Separating it into its own persistent root fixes both problems at once.
+- **Least privilege preserved.** No permission was broadened to make this work: the ECR-pull
+  and S3-read grants are exactly as narrow as under D-017 (3 named repos, one bucket prefix),
+  just computed differently and owned by a different root.
+- **AMI boundary unaffected.** No Wazuh application state was added to
+  [packer/scripts/install-wazuh-base.sh](../packer/scripts/install-wazuh-base.sh) or
+  `packer/wazuh-ami.pkr.hcl`; D-011 still holds. Wazuh stays pinned to **4.14.7** (D-009).
+- **Consequences:** one more persistent root to track (justified per D-008/D-012/D-016 by a
+  materially different lifecycle — identity outlives the disposable runtime). RUNBOOK.md's
+  migration section is rewritten to the 3-step order above; no step re-applies a root it
+  already applied. **Implemented in code only — no root has been applied under this
+  decision.** Evidence: [terraform/wazuh-runtime-identity/](../terraform/wazuh-runtime-identity/),
+  [terraform/wazuh-artifacts/variables.tf](../terraform/wazuh-artifacts/variables.tf),
+  [terraform/wazuh-artifacts/ecr.tf](../terraform/wazuh-artifacts/ecr.tf),
+  [terraform/wazuh-artifacts/storage.tf](../terraform/wazuh-artifacts/storage.tf),
+  [terraform/wazuh-project/variables.tf](../terraform/wazuh-project/variables.tf),
+  [terraform/wazuh-project/ec2.tf](../terraform/wazuh-project/ec2.tf).
+
+---
+
+## D-019 — Wazuh runtime EC2 hardening: dedicated SG, encrypted gp3 root volume, IMDSv2, outputs
+
+- **Status:** Accepted (2026-09-16)
+- **Context:** the Phase 1 completion gaps tracked in [CURRENT_STATE.md](CURRENT_STATE.md)
+  included: the Wazuh EC2 had no dedicated security group (so it would have used the VPC's
+  default SG), no explicit root volume (AMI default size/type, not necessarily encrypted by
+  policy), no IMDSv2 enforcement, and no useful Terraform outputs.
+- **Decision:**
+  - **Dedicated security group** ([terraform/wazuh-project/security.tf](../terraform/wazuh-project/security.tf)):
+    **zero ingress** rules (administration is SSM-only, D-001 — the SSM agent initiates
+    outbound; no inbound rule is needed). Egress limited to exactly two purposes: HTTPS to
+    the VPC interface endpoints via an SG-to-SG rule referencing
+    `aws_security_group.vpc_endpoints`, and HTTPS to the S3 gateway endpoint via its prefix
+    list (`aws_vpc_endpoint.s3_gateway.prefix_list_id`) — gateway endpoints have no ENI/SG,
+    so a prefix-list rule is the correct mechanism, not a CIDR or SG rule. No `0.0.0.0/0`
+    egress; this VPC has no IGW/NAT (D-002) so nothing else is reachable anyway, but the
+    explicit scoping documents intent.
+  - **No public IP:** `associate_public_ip_address = false` set explicitly on the instance
+    (the subnet already defaults to no auto-assigned public IPs; this makes the intent
+    explicit rather than implicit).
+  - **IMDSv2 required:** `metadata_options { http_tokens = "required", http_put_response_hop_limit = 1 }`,
+    matching the pattern already used for the Packer builder
+    ([packer/wazuh-ami.pkr.hcl](../packer/wazuh-ami.pkr.hcl)).
+  - **Encrypted gp3 root volume:** `root_block_device { volume_type = "gp3", volume_size = 50, encrypted = true }`.
+    50 GB is a reference size (manager + indexer), not a hard requirement — the historical
+    ~50 GB note in [ARCHITECTURE.md](ARCHITECTURE.md) is now backed by an explicit block
+    instead of relying on the AMI's default size. Encryption uses the default AWS-managed
+    key — no CMK introduced (matches the D-015 EBS/KMS deferral: no customer-managed key
+    until there is a concrete reason).
+  - **Outputs:** [terraform/wazuh-project/outputs.tf](../terraform/wazuh-project/outputs.tf)
+    now exposes `instance_id`, `ssm_start_session_command` (ready to paste), and
+    `security_group_id`.
+- **Consequences:** closes the "EC2 hardening" and "useful runtime outputs" Phase 1
+  completion gaps in [CURRENT_STATE.md](CURRENT_STATE.md). Root volume sizing remains a
+  judgment call to revisit once real indexer storage behavior is observed.
+  **Implemented in code only — not applied.**

@@ -17,16 +17,17 @@ AWS_REGION="${aws_region}"
 WAZUH_DIR="/opt/wazuh-docker"
 ARTIFACT_BUCKET="${artifact_bucket}"
 
-
 ############################################################
-# Get AWS account ID and build the private ECR registry address
+# ECR registry (Security account — D-014 / D-016)
+#
+# Passed in explicitly by Terraform (var.wazuh_ecr_registry). Deliberately NOT
+# derived from `aws sts get-caller-identity` here: that would resolve to THIS
+# instance's own account (Lab), but the Wazuh ECR repositories are owned by
+# the Security account. Pulling would silently fail (wrong registry / no
+# access) if this script guessed its own account instead.
 ############################################################
 
-ACCOUNT_ID=$(aws sts get-caller-identity \
-    --query Account \
-    --output text)
-
-ECR_REGISTRY="$${ACCOUNT_ID}.dkr.ecr.$${AWS_REGION}.amazonaws.com"
+ECR_REGISTRY="${ecr_registry}"
 
 
 ############################################################

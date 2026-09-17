@@ -3,16 +3,22 @@
 > Operational skeleton for the temporary-lab lifecycle:
 > `deploy → test → validate → document → destroy`.
 >
-> **Reality check (2026-09-08):** the Packer prerequisite phase is **complete** — but it was
-> built and validated in the **Management** account (`ami-0b1bf8942dfc0daf1`, `us-east-2` —
-> historical evidence, not a config constant). CloudGuard has adopted the
-> Management / Security / Lab model ([DECISIONS.md](DECISIONS.md) D-014). **Nothing has been
-> applied in the Security or Lab accounts.** The immediate work is the **Migration**
-> (section M below): re-apply the Packer build root in Security, build a Security-owned AMI,
-> share it to Lab, retire the Management copy, apply the persistent artifact root in
-> Security. Sections 3–11 (the **runtime** Wazuh deployment in Lab) are still not runnable —
-> B2/B3, cross-account ECR/S3 policies, and the publication-ordering decision remain open.
-> Those steps stay marked **⛔**.
+> **Reality check (2026-09-16):** the Packer prerequisite phase is **complete**, and — per
+> the operator — the **build-path migration has run**: `terraform/packer-build/` is applied
+> in **Security**, a new Security-owned golden AMI is built, validated, **shared to Lab**,
+> confirmed launchable there, and SSM-smoke-tested (migration steps 1–4). This repository
+> pass made **no AWS calls** and recorded no independent evidence (no AMI id / account id).
+> The legacy Management build infra + the historical AMI (`ami-0b1bf8942dfc0daf1`) are still
+> in **Management**, pending retirement (step 5). `terraform/wazuh-runtime-identity/`
+> (step 6), `terraform/wazuh-artifacts/` (step 7), and `terraform/wazuh-project/` (step 9)
+> are **not applied anywhere**. This pass also fixed a circular Terraform dependency between
+> the last two of those roots (D-018): the Lab EC2 IAM role now lives in a new persistent
+> root applied **before** `wazuh-artifacts`, so the cross-account grant is a single,
+> unconditional apply — no re-apply of any root is needed. `terraform/wazuh-project/` also
+> gained EC2 hardening (dedicated SG, IMDSv2, encrypted root volume, real outputs — D-019).
+> Code only. Sections 3–11 (the **runtime** Wazuh deployment in Lab) are still not
+> runnable — B2/B3 and the publication-ordering decision remain open. Those steps stay
+> marked **⛔**.
 
 All commands assume repo root `cloud-secops-lab/` and AWS credentials for the target account
 already configured (`aws sts get-caller-identity` succeeds).
@@ -55,17 +61,22 @@ source**. The one cross-account value, the Lab account ID, is a required Packer 
 
 ---
 
-## M. Migration to the three-account model (D-014)  — ⛔ Not yet run
+## M. Migration to the three-account model (D-014 / D-018)  — steps 1–4 DONE (operator-reported), 5–9 ⛔
 
-> One-time. Nothing below has happened. Do not claim otherwise. Each numbered step names the
-> profile it runs as. Steps are ordered; do not skip ahead.
+> Each numbered step names the profile it runs as. Steps are ordered; do not skip ahead.
+> **Steps 1–4 are reported done by the operator** — this repository pass made no AWS calls
+> and cannot independently confirm them; treat that status as reported, not verified here.
+> **Steps 6–9 are a strictly one-directional sequence (D-018) — no root is ever re-applied.**
 
-**Current reality:** the validated AMI `ami-0b1bf8942dfc0daf1` and the persistent Packer
-build infrastructure exist **only in the Management account**. The Security and Lab accounts
-and their SSO permission sets exist; **no CloudGuard infrastructure has been applied there.**
+**Current reality:** per the operator, the persistent Packer build infrastructure and a new
+golden AMI are applied/built in the **Security** account, and the AMI is shared to and
+smoke-tested in **Lab**. The historical AMI `ami-0b1bf8942dfc0daf1` and the legacy Packer
+build infrastructure are still in **Management**, pending step 5.
+`terraform/wazuh-runtime-identity/` (step 6), `terraform/wazuh-artifacts/` (step 7), and
+`terraform/wazuh-project/` (step 9) have not been applied anywhere.
 
 ```bash
-# 1. Apply the persistent Packer build infrastructure in SECURITY.
+# 1. Apply the persistent Packer build infrastructure in SECURITY.  — DONE (operator-reported)
 aws sso login --profile security-admin
 terraform -chdir=terraform/packer-build fmt -check
 terraform -chdir=terraform/packer-build init          # hashicorp/aws 6.57.1 (committed lock file)
@@ -75,6 +86,7 @@ AWS_PROFILE=security-admin terraform -chdir=terraform/packer-build output
 
 # 2. Build + validate a NEW Security-owned base AMI (section 1). Runs as `security`,
 #    Packer assumes the execution role. Requires the Lab account id for the share.
+#    — DONE (operator-reported); record the real AMI id here once confirmed directly.
 aws sso login --profile security
 cd packer
 export PKR_VAR_packer_execution_role_arn="$(AWS_PROFILE=security-admin terraform -chdir=../terraform/packer-build output -raw packer_execution_role_arn)"
@@ -84,38 +96,64 @@ AWS_PROFILE=security packer build .
 cd ..
 #    -> record the new AMI id; smoke-test it (section 2).
 
-# 3. Confirm the AMI is shared to Lab (launch permission only, not public):
+# 3. Confirm the AMI is shared to Lab (launch permission only, not public):  — DONE (operator-reported)
 AWS_PROFILE=security aws ec2 describe-image-attribute --region us-east-2 \
   --image-id <new ami id> --attribute launchPermission
 
-# 4. From the Lab account, confirm Lab can see / launch the shared AMI:
+# 4. From the Lab account, confirm Lab can see / launch the shared AMI + SSM smoke test:
+#    — DONE (operator-reported)
 AWS_PROFILE=lab-admin aws ec2 describe-images --region us-east-2 --image-ids <new ami id>
 
-# 5. ONLY after step 4 passes — destroy the LEGACY Packer build infra in MANAGEMENT:
+# 5. ONLY after independently confirming step 4 — destroy the LEGACY Packer build infra
+#    in MANAGEMENT:  — NOT DONE
 aws sso login --profile cloudguard-admin
 AWS_PROFILE=cloudguard-admin terraform -chdir=terraform/packer-build destroy
 #    (the Management-account AMI ami-0b1bf8942dfc0daf1 can be deregistered separately once
 #     the Security AMI is proven)
 
-# 6. Apply the persistent artifact layer in SECURITY (D-016):
+# 6. Apply the persistent Lab runtime identity (D-018). This creates the EC2 role + instance
+#    profile that BOTH later roots depend on — must run before step 7.  — NOT DONE
+aws sso login --profile lab-admin
+terraform -chdir=terraform/wazuh-runtime-identity fmt -check
+terraform -chdir=terraform/wazuh-runtime-identity init
+terraform -chdir=terraform/wazuh-runtime-identity validate
+AWS_PROFILE=lab-admin terraform -chdir=terraform/wazuh-runtime-identity apply \
+  -var "security_account_id=<security account id>"
+AWS_PROFILE=lab-admin terraform -chdir=terraform/wazuh-runtime-identity output
+
+# 7. Apply the persistent artifact layer in SECURITY (D-016), supplying step 6's role ARN.
+#    lab_runtime_role_arn is REQUIRED — this grants cross-account access in this ONE apply,
+#    no re-apply needed later.  — NOT DONE
 aws sso login --profile security-admin
 terraform -chdir=terraform/wazuh-artifacts fmt -check
 terraform -chdir=terraform/wazuh-artifacts init
 terraform -chdir=terraform/wazuh-artifacts validate
-AWS_PROFILE=security-admin terraform -chdir=terraform/wazuh-artifacts apply
+AWS_PROFILE=security-admin terraform -chdir=terraform/wazuh-artifacts apply \
+  -var "lab_runtime_role_arn=$(AWS_PROFILE=lab-admin terraform -chdir=terraform/wazuh-runtime-identity output -raw wazuh_runtime_role_arn)"
 AWS_PROFILE=security-admin terraform -chdir=terraform/wazuh-artifacts output
 
-# 7. Continue B3 (Wazuh 4.14.7 artifact set + S3 publish) and B2 (ECR image mirror) — sections 3/4.
-# 8. Deploy the disposable Wazuh runtime in LAB — section 5.
+# 8. Continue B3 (Wazuh 4.14.7 artifact set + S3 publish) and B2 (ECR image mirror) — sections 3/4.
+#    — NOT DONE
+
+# 9. Deploy the disposable Wazuh runtime in LAB, supplying step 6's instance-profile name and
+#    step 7's registry/bucket outputs (D-017/D-018) — section 5. This is the LAST step; no
+#    earlier root needs to be touched again.  — NOT DONE
 ```
 
 > **Terraform state.** State is local per root. Keep each root's `.terraform/` + state file
-> with the operator who runs it. A remote backend is an open decision (now 3 roots / 2
-> accounts) — see [CURRENT_STATE.md](CURRENT_STATE.md).
+> with the operator who runs it. A remote backend is an open decision (now 4 roots / 2
+> accounts) — see [CURRENT_STATE.md](CURRENT_STATE.md). **Do not switch Terraform workspaces
+> or touch any root's state file** as part of running these steps — each root uses its
+> default workspace and local state as-is.
+>
+> **Dependency order is one-directional (D-018):** `wazuh-runtime-identity` → `wazuh-artifacts`
+> → `wazuh-project`. No root here is ever applied twice for a dependency reason — if you find
+> yourself re-applying an earlier root to pick up a later root's output, something is wrong;
+> see [CURRENT_STATE.md](CURRENT_STATE.md) → *Dependency order*.
 
 ---
 
-## 1. Build the Wazuh base AMI (Packer)  — ✅ Proven (in Management 2026-09-07); re-home to Security
+## 1. Build the Wazuh base AMI (Packer)  — ✅ Proven; applied in Security (operator-reported)
 
 ### 1a. Provision the persistent Packer build infrastructure (one-time per account; bootstrap)
 
@@ -221,11 +259,12 @@ AWS CLI v2, persisted `vm.max_map_count=262144`, Docker enabled at boot, `ubuntu
 
 ---
 
-## 2. Validate the AMI (smoke test)  — ✅ Done once in Management; repeat for the Security AMI
+## 2. Validate the AMI (smoke test)  — ✅ Done in Management (2026-09-07) and again in Security (operator-reported)
 
 The Management-account AMI `ami-0b1bf8942dfc0daf1` was smoke-tested via a manual EC2 instance
-reached over Session Manager and **validated** on 2026-09-07. **Repeat this against the new
-Security-owned AMI** (migration section M step 2):
+reached over Session Manager and **validated** on 2026-09-07. Per the operator, this was
+**repeated against the new Security-owned AMI** and the Lab-launched instance
+(migration section M steps 2 and 4) — not independently verified in this pass:
 
 - AMI visible: `aws ec2 describe-images --owners self --filters 'Name=name,Values=cloud-secops-wazuh-*' --region us-east-2`
 - On a throwaway instance, confirm: `docker --version`, `docker compose version`,
@@ -241,13 +280,17 @@ supply the **Security-owned, Lab-shared** AMI id at runtime-deploy time (step 5)
 
 ---
 
-## Steps 3–5 — runtime deployment (Lab), pending the migration + B2/B3
+## Steps 3–5 — runtime deployment (Lab), pending B2/B3
 
-> Order to resolve first (Open decision #1): **the Security artifact root
-> (`terraform/wazuh-artifacts/`) must be applied and the ECR repos + `s3://<bucket>/wazuh/`
-> populated before the Lab runtime first-boots.** With D-016 the destinations are now a
-> separate, earlier apply — but the population steps (B2/B3) and the cross-account access
-> policies are still missing. Do not treat steps 3–5 as a validated order yet.
+> Order (D-016/D-018), strictly one-directional: **apply `terraform/wazuh-runtime-identity/`
+> in Lab first** (migration step 6) → **apply `terraform/wazuh-artifacts/` in Security**,
+> supplying step 6's role ARN (migration step 7 — grants cross-account access in that single
+> apply) → populate it (B2/B3, steps 3–4 below) → **apply `terraform/wazuh-project/` in
+> Lab** (step 5, migration step 9), supplying steps 6 and 7's outputs. No root is re-applied
+> for a dependency reason — see [CURRENT_STATE.md](CURRENT_STATE.md) → *Dependency order*.
+> If the runtime's `docker compose pull` / `aws s3 sync` ever fail with `AccessDenied`, it
+> means step 7 ran before step 6 (or with the wrong role ARN) — not an inherent two-pass
+> requirement any more.
 
 ### 3. Publish Wazuh application artifacts to S3  — ⛔ Not yet operational (B3)
 
@@ -264,13 +307,15 @@ Artifact bucket name pattern (from
 `cloud-secops-lab-artifacts-<security_account_id>` — get the exact name from
 `terraform -chdir=terraform/wazuh-artifacts output -raw artifact_bucket_name`.
 
-**Cross-account:** the Lab runtime instance role needs an S3 bucket policy on the
-Security-owned bucket granting `s3:GetObject` on `wazuh/*` (and `s3:ListBucket` with that
-prefix). Not implemented — next work.
+**Cross-account (D-018 — implemented, not applied):** `terraform/wazuh-artifacts/storage.tf`
+has an unconditional bucket-policy grant (`s3:GetObject` on `wazuh/*`, `s3:ListBucket`
+prefix-scoped) for the Lab runtime role, `var.lab_runtime_role_arn` (required). Granted the
+moment this root is applied — see the ordering note above.
 
 ### 4. Publish Wazuh images to private ECR  — ⛔ Not yet operational (B2)
 
-The three repository **definitions** exist ([ecr.tf](../terraform/wazuh-project/ecr.tf)):
+The three repositories are defined in **Security**
+([terraform/wazuh-artifacts/ecr.tf](../terraform/wazuh-artifacts/ecr.tf)):
 
 ```
 cloud-secops-lab/wazuh-manager
@@ -282,18 +327,33 @@ cloud-secops-lab/wazuh-dashboard
 upstream Wazuh **4.14.7** images → tag → push to the **Security-owned** repos from section M
 step 6). The repos are `IMMUTABLE`, so a tag cannot be overwritten once pushed.
 
-**Cross-account:** the Lab runtime instance role needs an ECR repository policy on each
-Security-owned repo granting `ecr:BatchGetImage` / `ecr:GetDownloadUrlForLayer` /
-`ecr:BatchCheckLayerAvailability` (auth token is account-local). Not implemented — next work.
+**Cross-account (D-018 — implemented, not applied):**
+[terraform/wazuh-artifacts/ecr.tf](../terraform/wazuh-artifacts/ecr.tf) has an unconditional
+`aws_ecr_repository_policy` per repo granting `ecr:BatchGetImage` /
+`ecr:GetDownloadUrlForLayer` / `ecr:BatchCheckLayerAvailability` to the Lab runtime role
+(`ecr:GetAuthorizationToken` stays account-local — granted in
+`terraform/wazuh-runtime-identity/iam.tf` instead, `Resource = "*"` is an AWS API constraint,
+not a broadening). Granted the moment `terraform/wazuh-artifacts/` is applied (section M
+step 7) — not conditional, no re-apply.
 
-### 5. Terraform init / plan / apply — the Lab runtime  — ⛔ Not yet operational (depends on M + 3 + 4)
+### 5. Terraform init / plan / apply — the Lab runtime  — ⛔ Not yet operational (depends on M steps 6+7)
 
 ```bash
 aws sso login --profile lab-admin
+
+# Pull the already-created identity + Security-owned resource identifiers (section M steps
+# 6 and 7 must have already run):
+export TF_VAR_wazuh_runtime_instance_profile_name="$(AWS_PROFILE=lab-admin terraform -chdir=terraform/wazuh-runtime-identity output -raw wazuh_runtime_instance_profile_name)"
+export TF_VAR_wazuh_ecr_registry="$(AWS_PROFILE=security-admin terraform -chdir=terraform/wazuh-artifacts output -raw ecr_registry)"
+export TF_VAR_wazuh_artifact_bucket_name="$(AWS_PROFILE=security-admin terraform -chdir=terraform/wazuh-artifacts output -raw artifact_bucket_name)"
+
 terraform -chdir=terraform/wazuh-project init
 terraform -chdir=terraform/wazuh-project plan  -var "wazuh_ami_id=<security AMI shared to Lab>"
 AWS_PROFILE=lab-admin terraform -chdir=terraform/wazuh-project apply -var "wazuh_ami_id=<security AMI shared to Lab>"
 ```
+
+This is the **last** step of the dependency chain (D-018) — no earlier root needs a
+subsequent re-apply. The runtime can pull images and read config as soon as it boots.
 
 Notes:
 
@@ -301,15 +361,20 @@ Notes:
 - `var.wazuh_ami_id` has **no default** by design. Supply the **Security-owned AMI id that
   was shared to Lab** (section M steps 2–4) via `-var`, a git-ignored `terraform.tfvars`, or
   `TF_VAR_wazuh_ami_id`.
+- `var.wazuh_runtime_instance_profile_name` (from `terraform/wazuh-runtime-identity/`) and
+  `var.wazuh_ecr_registry` / `var.wazuh_artifact_bucket_name` (from `terraform/wazuh-artifacts/`)
+  also have **no defaults** (D-017/D-018) — this root cannot be applied without them; none
+  are guessed.
 - State is **local** (no remote backend) — do not delete `.terraform/` or the state file
-  between plan and destroy.
-- **Known gaps** before this is a clean run: the legacy `ecr.tf` / `storage.tf` are still in
-  this root (superseded by `terraform/wazuh-artifacts/`, removal blocked by `stash@{0}`) —
-  applying this root as-is would re-create ECR repos / a bucket **in Lab**, which is wrong;
-  resolve the stash and remove them first. Also: no dedicated security group, no explicit
-  root volume, no IMDSv2 enforcement, no outputs; and `install-wazuh.sh.tftpl` derives the
-  ECR registry host from the Lab account id, not the Security one. See
-  [CURRENT_STATE.md](CURRENT_STATE.md).
+  between plan and destroy. Do not switch this root's Terraform workspace.
+- This root **owns none of**: the ECR repos, the S3 bucket (D-017 — `ecr.tf` / `storage.tf`
+  removed), or the EC2 IAM role/profile (D-018 — `roles.tf` removed, moved to
+  `terraform/wazuh-runtime-identity/`). The `stash@{0}` "preserve ecr comment changes" now
+  targets a deleted file; it was left untouched and will conflict if popped, which is
+  expected.
+- **Hardening done (D-019):** dedicated security group (zero ingress; egress scoped to the
+  VPC endpoints), no public IP, IMDSv2 required, encrypted `gp3` root volume (50 GB
+  reference), and `instance_id` / `ssm_start_session_command` / `security_group_id` outputs.
 
 ---
 
@@ -318,7 +383,9 @@ Notes:
 All commands here run against the **Lab** account (`AWS_PROFILE=lab-admin` or `lab`).
 
 ```bash
-# find the instance
+# find the instance (or just use the runtime root's own output, D-019):
+terraform -chdir=terraform/wazuh-project output -raw instance_id
+
 aws ec2 describe-instances --region us-east-2 \
   --filters 'Name=tag:Project,Values=cloud-secops-lab' 'Name=instance-state-name,Values=running' \
   --query 'Reservations[].Instances[].InstanceId' --output text
@@ -327,8 +394,8 @@ aws ec2 describe-instances --region us-east-2 \
 aws ssm describe-instance-information --region us-east-2 \
   --query 'InstanceInformationList[].InstanceId' --output text
 
-# open a shell
-aws ssm start-session --region us-east-2 --target i-XXXXXXXXXXXXXXXXX
+# open a shell — or just run the ready-to-paste command (D-019):
+$(terraform -chdir=terraform/wazuh-project output -raw ssm_start_session_command)
 ```
 
 On the instance, check the bootstrap log:
@@ -392,14 +459,15 @@ Do this after every validation session (per [DECISIONS.md](DECISIONS.md) D-006).
 > (D-012). **Never** `terraform destroy` a Security root as part of the Lab validation
 > cycle.
 >
-> Caveat during migration: the superseded `ecr.tf` / `storage.tf` are still in
-> `terraform/wazuh-project/` (stash-blocked removal). If this root was applied before they
-> were removed, its state holds an ECR/bucket in **Lab** — remove those from state / the
-> account deliberately, don't rely on this destroy.
+> Historical note: `terraform/wazuh-project/` used to define its own ECR repos and S3
+> bucket. Those were **removed** (D-017) before this root was ever applied, so a normal
+> `terraform destroy` here has nothing Lab-side ECR/S3 to worry about. If an **old** state
+> file from before that removal is somehow still in play, check it for stray
+> `aws_ecr_repository.*` / `aws_s3_bucket.wazuh_artifacts` entries before destroying and
+> remove them from state / the account deliberately rather than relying on this destroy.
 
-If the runtime ever created objects in the (Lab-side, legacy) bucket, empty it first
-(`aws s3 rm ... --recursive`) — the real artifact bucket in Security is managed separately
-and is not touched by this destroy.
+The real artifact bucket and ECR repos live in **Security**
+(`terraform/wazuh-artifacts/`) and are never touched by this destroy.
 
 ---
 
@@ -434,11 +502,12 @@ Cost watch items while the **Lab** runtime is deployed: the **interface VPC endp
 the **Wazuh EC2 instance** carry recurring hourly (and, for endpoints, data-processing)
 cost. `terraform destroy` the runtime root after each session.
 
-The **Security** roots carry **no hourly cost**: `terraform/packer-build/` is VPC / subnet /
-IGW / route table / SG / IAM only; `terraform/wazuh-artifacts/` is ECR repos + an S3 bucket
-(storage only). Published ECR images and S3 objects incur storage cost and **persist by
-design** (D-016). Tear either down only with a deliberate
-`terraform -chdir=terraform/<root> destroy` in the Security account.
+The **Security and Lab-identity** roots carry **no hourly cost**: `terraform/packer-build/`
+is VPC / subnet / IGW / route table / SG / IAM only; `terraform/wazuh-artifacts/` is ECR
+repos + an S3 bucket (storage only); `terraform/wazuh-runtime-identity/` is IAM only.
+Published ECR images and S3 objects incur storage cost and **persist by design** (D-016).
+Tear any of them down only with a deliberate `terraform -chdir=terraform/<root> destroy` in
+the owning account.
 
 ---
 
@@ -446,14 +515,17 @@ design** (D-016). Tear either down only with a deliberate
 
 | What | Where / value |
 | --- | --- |
-| Terraform root — Packer build network (persistent, **Security**, D-012/D-014) | [terraform/packer-build/](../terraform/packer-build/) — `security-admin` to apply |
-| Terraform root — ECR + S3 artifact layer (persistent, **Security**, D-016) | [terraform/wazuh-artifacts/](../terraform/wazuh-artifacts/) — `security-admin` to apply |
-| Terraform root — Wazuh runtime (disposable, **Lab**, D-006/D-014) | [terraform/wazuh-project/](../terraform/wazuh-project/) — `lab-admin` to apply |
-| Packer build (golden AMI, **Security**; shared to Lab per D-015) | [packer/](../packer/) — `security` profile; `PKR_VAR_packer_execution_role_arn` + `PKR_VAR_lab_account_id` required |
-| Runtime bootstrap (user-data) | [terraform/wazuh-project/scripts/install-wazuh.sh.tftpl](../terraform/wazuh-project/scripts/install-wazuh.sh.tftpl) |
+| Terraform root — Packer build network (persistent, **Security**, D-012/D-014) | [terraform/packer-build/](../terraform/packer-build/) — `security-admin` to apply — **applied, operator-reported** |
+| Terraform root — Lab runtime IAM identity (persistent, **Lab**, D-018) | [terraform/wazuh-runtime-identity/](../terraform/wazuh-runtime-identity/) — `lab-admin` to apply — **not applied**; apply **before** `wazuh-artifacts` |
+| Terraform root — ECR + S3 artifact layer + cross-account policies (persistent, **Security**, D-016/D-018) | [terraform/wazuh-artifacts/](../terraform/wazuh-artifacts/) — `security-admin` to apply — **not applied**; requires `lab_runtime_role_arn` (from the identity root) |
+| Terraform root — Wazuh runtime (disposable, **Lab**, D-006/D-014/D-017/D-019) | [terraform/wazuh-project/](../terraform/wazuh-project/) — `lab-admin` to apply — **not applied**; owns none of ECR/S3/IAM, requires `wazuh_runtime_instance_profile_name` / `wazuh_ecr_registry` / `wazuh_artifact_bucket_name` |
+| Packer build (golden AMI, **Security**; shared to Lab per D-015) | [packer/](../packer/) — `security` profile; `PKR_VAR_packer_execution_role_arn` + `PKR_VAR_lab_account_id` required — **built + shared, operator-reported** |
+| Runtime bootstrap (user-data) | [terraform/wazuh-project/scripts/install-wazuh.sh.tftpl](../terraform/wazuh-project/scripts/install-wazuh.sh.tftpl) — ECR registry now comes from `${ecr_registry}` (Terraform), not `aws sts get-caller-identity` (D-017) |
 | Region | `us-east-2` (all roots) |
 | Runtime VPC CIDR | `10.0.0.0/16` · subnet `10.0.1.0/24` (Lab) · build VPC `10.10.0.0/24` (Security) |
-| Artifact bucket | `cloud-secops-lab-artifacts-<security_account_id>` (from `wazuh-artifacts` output) |
+| Artifact bucket | `cloud-secops-lab-artifacts-<security_account_id>` (from `wazuh-artifacts` output `artifact_bucket_name`) |
+| ECR registry hostname | `<security_account_id>.dkr.ecr.us-east-2.amazonaws.com` (from `wazuh-artifacts` output `ecr_registry`) |
+| Cross-account grant | `wazuh-artifacts` `var.lab_runtime_role_arn` (required) — single apply, see section M steps 6–7 |
 | Wazuh version | **4.14.7** (D-009) |
 | Migration | section **M** above |
 | Hard blockers / gaps / open decisions | [CURRENT_STATE.md](CURRENT_STATE.md) |

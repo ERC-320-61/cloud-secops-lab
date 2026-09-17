@@ -102,21 +102,20 @@ See [RUNBOOK.md](RUNBOOK.md).
 
 | Account | Responsibility | State |
 | --- | --- | --- |
-| **Management** | AWS Organizations, IAM Identity Center, billing / cost / governance. No normal workload or security tooling after migration. | Accepted (D-014); still holds the legacy Packer build infra + historical AMI pending migration |
-| **Security** | Persistent Packer build infrastructure + Packer execution role; **golden Wazuh AMI owner**; persistent Wazuh ECR/S3 artifact layer; future centralized security tooling — CloudTrail, Security Hub, GuardDuty, centralized logging, EventBridge, Firehose, SQS, Step Functions, Lambda, SNS, selected Config/CloudWatch, private security VPC. | Accepted (D-014); **not yet applied** |
-| **Lab** | Disposable Wazuh runtime; Windows/Linux security-test hosts; Wazuh agents; workloads that generate telemetry/findings; SprintOps Tracker dev/test. | Accepted (D-014); **not yet applied** |
+| **Management** | AWS Organizations, IAM Identity Center, billing / cost / governance. No normal workload or security tooling after migration. | Accepted (D-014); legacy Packer build infra + historical AMI pending retirement there |
+| **Security** | Persistent Packer build infrastructure + Packer execution role; **golden Wazuh AMI owner**; persistent Wazuh ECR/S3 artifact layer; future centralized security tooling — CloudTrail, Security Hub, GuardDuty, centralized logging, EventBridge, Firehose, SQS, Step Functions, Lambda, SNS, selected Config/CloudWatch, private security VPC. | Accepted (D-014) |
+| **Lab** | Disposable Wazuh runtime; Windows/Linux security-test hosts; Wazuh agents; workloads that generate telemetry/findings; SprintOps Tracker dev/test. | Accepted (D-014) |
 
 Access is via **IAM Identity Center** permission sets: Management `cloudguard-admin`;
 Security `security-admin` (AdministratorAccess) and `security` (`CloudGuardOperator`); Lab
 `lab-admin` (AdministratorAccess) and `lab` (`LabOperator`).
 
 The three-account model is **accepted** ([DECISIONS.md](DECISIONS.md) D-014, superseding the
-earlier open transition-point question in D-007). The accounts and SSO access exist, but
-**no CloudGuard infrastructure has been applied into Security or Lab yet** — what is in AWS
-today is the legacy single-account placement in Management (persistent Packer build
-infrastructure + a validated base AMI). Terraform code is account-agnostic (no account IDs
-committed); migration is driven by which credentials run each `terraform apply`. The
-migration sequence is in [RUNBOOK.md](RUNBOOK.md).
+earlier open transition-point question in D-007) and migration into it is under way.
+Terraform code is account-agnostic (no account IDs committed); migration is driven by which
+credentials run each `terraform apply`. Exactly what is applied in which account today is
+volatile state — see [CURRENT_STATE.md](CURRENT_STATE.md), not this file. The migration
+sequence is in [RUNBOOK.md](RUNBOOK.md).
 
 ## Wazuh's intended role
 
